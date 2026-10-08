@@ -1,0 +1,28 @@
+using NexerAI.Core.Domain;
+using NexerAI.Core.Ports;
+
+namespace NexerAI.Core.Tests.Fakes;
+
+public sealed class FakeAgentInstaller : IAgentInstaller
+{
+    public IReadOnlyList<InstalledPlugin> Installed { get; init; } = [];
+
+    public List<PluginInstallRequest> InstallRequests { get; } = [];
+
+    public List<McpServerRegistration> McpRegistrations { get; } = [];
+
+    public Task<IReadOnlyList<InstalledPlugin>> GetInstalledPluginsAsync(CancellationToken ct) =>
+        Task.FromResult(Installed);
+
+    public Task InstallPluginAsync(PluginInstallRequest request, CancellationToken ct)
+    {
+        InstallRequests.Add(request);
+        return Task.CompletedTask;
+    }
+
+    public Task AddMcpServerAsync(McpServerRegistration registration, CancellationToken ct)
+    {
+        McpRegistrations.Add(registration);
+        return Task.CompletedTask;
+    }
+}
