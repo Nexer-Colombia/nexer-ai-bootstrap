@@ -8,7 +8,7 @@
     { "input": "https://github.com/acme/website.git/", "expected": "github.com/acme/website", "note": "Trailing slash and .git suffix together." },
     { "input": "https://GitHub.com/Acme/WebSite.git", "expected": "github.com/acme/website", "note": "Host and path are lowercased." },
     { "input": "https://jdoe@github.com/acme/website.git", "expected": "github.com/acme/website", "note": "User name is stripped." },
-    { "input": "https://jdoe:ghp_example123@github.com/acme/website.git", "expected": "github.com/acme/website", "note": "User and token are stripped." },
+    { "input": "https://jdoe:example-password@github.com/acme/website.git", "expected": "github.com/acme/website", "note": "User and token are stripped." },
     { "input": "http://github.com/acme/website", "expected": "github.com/acme/website", "note": "The scheme is not part of the key, so http and https match." },
     { "input": "https://github.com:443/acme/website", "expected": "github.com/acme/website", "note": "Ports are dropped from https URLs." },
     { "input": "https://github.com/acme/website.git?ref=main#readme", "expected": "github.com/acme/website", "note": "Query string and fragment are dropped." },
