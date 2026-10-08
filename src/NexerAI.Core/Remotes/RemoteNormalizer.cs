@@ -38,7 +38,7 @@ public static class RemoteNormalizer
             segments.RemoveAll(s => s.Length == 0);
         }
 
-        if (!IsQualifiedHost(host) || segments.Count == 0)
+        if (!IsValidHost(host) || segments.Count == 0)
         {
             return false;
         }
@@ -92,18 +92,26 @@ public static class RemoteNormalizer
         }
 
         host = head[hostStart..colon];
+        if (host.Length == 1 && char.IsAsciiLetter(host[0]))
+        {
+            return false; // Git's rule: a one-letter host is a Windows drive letter (C:/repos/x).
+        }
+
         path = StripQueryAndFragment(remote[(colon + 1)..]);
         return true;
     }
 
     private static string StripQueryAndFragment(string value) => value.Split('?', '#')[0];
 
-    /// <summary>Accepts DNS names with at least one dot; this also rejects drive letters such as <c>C:</c>.</summary>
-    private static bool IsQualifiedHost(string host) =>
-        host.Contains('.', StringComparison.Ordinal)
+    /// <summary>Accepts DNS names, single-label on-premises hosts (<c>tfs</c>) and IPv4 addresses.</summary>
+    private static bool IsValidHost(string host) =>
+        host.Length > 0
         && host.All(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '-');
 
-    /// <summary>Maps every Azure DevOps form to <c>dev.azure.com/org/project/_git/repo</c>.</summary>
+    /// <summary>
+    /// Maps every Azure DevOps Services form to <c>dev.azure.com/org/project/_git/repo</c>. On-premises
+    /// Azure DevOps Server / TFS hosts are not rewritten and keep the generic key.
+    /// </summary>
     private static (string Host, List<string> Segments) MapAzureDevOps(string host, List<string> segments)
     {
         var isSshV3 = host is "ssh.dev.azure.com" or "vs-ssh.visualstudio.com"
