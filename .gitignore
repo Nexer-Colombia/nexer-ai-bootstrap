@@ -1,0 +1,10 @@
+# Test and coverage output
+testResults.xml
+coverage.xml
+*.log
+
+# Editor and OS files
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini
