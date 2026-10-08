@@ -1,5 +1,6 @@
 <Solution>
   <Folder Name="/src/">
+    <Project Path="src/NexerAI.Cli/NexerAI.Cli.csproj" />
     <Project Path="src/NexerAI.Core/NexerAI.Core.csproj" />
   </Folder>
   <Folder Name="/tests/">

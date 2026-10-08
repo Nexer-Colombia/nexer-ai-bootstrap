@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>nexer-ai</AssemblyName>
+    <RootNamespace>NexerAI.Cli</RootNamespace>
+    <PublishAot>true</PublishAot>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\NexerAI.Core\NexerAI.Core.csproj" />
+  </ItemGroup>
+</Project>
