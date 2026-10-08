@@ -10,4 +10,8 @@
     <PackageReference Include="xunit.v3" />
     <ProjectReference Include="..\..\src\NexerAI.Core\NexerAI.Core.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- Shared test vectors: the contract with marketplace CI (see README). -->
+    <None Include="..\..\test-vectors\*.json" LinkBase="test-vectors" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

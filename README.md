@@ -11,6 +11,7 @@ Status: skeleton. Only `nexer-ai --version` works; `install`, `project`, `doctor
 | `src/NexerAI.Core` | Domain types and ports. No I/O, no process calls, AOT compatible |
 | `src/NexerAI.Cli` | `nexer-ai.exe`, the composition root that wires adapters to the core |
 | `tests/NexerAI.Core.Tests` | xUnit v3 tests for the core |
+| `test-vectors` | Language-agnostic test vectors shared with other implementations |
 
 ## Ports
 
@@ -24,6 +25,18 @@ The core is hexagonal: it depends only on these interfaces (`src/NexerAI.Core/Po
 | `IAgentInstaller` | Installed plugins, plugin install and MCP registration (Claude Code adapter only) |
 | `ICredentialStore` | Per-user tracker tokens keyed by tracker URL |
 | `IIssueReporter` | GitHub issues, for example a profile request for an unknown repository |
+
+## Test vectors
+
+`test-vectors/remotes.json` defines how a git remote is normalized to the canonical `host/path` key that `nexer-ai project` matches against the `repos` of project profiles. Each case has an `input`, the `expected` key (`null` means the input must be rejected) and a `note` with the reason.
+
+The file is a contract. Marketplace CI applies the same rule to reject two profiles that list the same remote, and the Nexer mod will use it later; every implementation must pass every case. This repository is the only source: consumers download the file pinned to a bootstrap tag, never to a branch:
+
+```text
+https://raw.githubusercontent.com/Nexer-Colombia/nexer-ai-bootstrap/<tag>/test-vectors/remotes.json
+```
+
+Changing a vector needs a pull request here (with the matching code change) and a new tag; consumers then move their pin. The xUnit theory in `tests/NexerAI.Core.Tests/Remotes` runs every case, so a new vector needs no test code.
 
 ## Build and test
 
