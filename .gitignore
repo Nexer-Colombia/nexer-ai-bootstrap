@@ -1,7 +1,10 @@
-# Test and coverage output
-testResults.xml
-coverage.xml
-*.log
+# .NET build output
+bin/
+obj/
+artifacts/
+TestResults/
+*.user
+.vs/
 
 # Editor and OS files
 .vscode/
