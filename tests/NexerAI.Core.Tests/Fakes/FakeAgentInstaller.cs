@@ -7,12 +7,17 @@ public sealed class FakeAgentInstaller : IAgentInstaller
 {
     public IReadOnlyList<InstalledPlugin> Installed { get; init; } = [];
 
+    public IReadOnlyList<InstalledMcpServer> InstalledMcpServers { get; init; } = [];
+
     public List<PluginInstallRequest> InstallRequests { get; } = [];
 
     public List<McpServerRegistration> McpRegistrations { get; } = [];
 
     public Task<IReadOnlyList<InstalledPlugin>> GetInstalledPluginsAsync(CancellationToken ct) =>
         Task.FromResult(Installed);
+
+    public Task<IReadOnlyList<InstalledMcpServer>> GetMcpServersAsync(CancellationToken ct) =>
+        Task.FromResult(InstalledMcpServers);
 
     public Task InstallPluginAsync(PluginInstallRequest request, CancellationToken ct)
     {
