@@ -8,9 +8,11 @@ Status: skeleton. Only `nexer-ai --version` works; `install`, `project`, `doctor
 
 | Path | Contents |
 |---|---|
-| `src/NexerAI.Core` | Domain types and ports. No I/O, no process calls, AOT compatible |
+| `src/NexerAI.Core` | Domain types, ports and the logic built on them. No I/O, no process calls, AOT compatible |
+| `src/NexerAI.Adapters` | Port implementations that touch the machine (file system, processes, network), AOT compatible |
 | `src/NexerAI.Cli` | `nexer-ai.exe`, the composition root that wires adapters to the core |
-| `tests/NexerAI.Core.Tests` | xUnit v3 tests for the core |
+| `tests/NexerAI.Core.Tests` | xUnit v3 tests for the core, against hand-written fakes of the ports |
+| `tests/NexerAI.Adapters.Tests` | xUnit v3 tests for the adapters, against real temporary directories |
 | `test-vectors` | Language-agnostic test vectors shared with other implementations |
 
 ## Ports
@@ -41,6 +43,18 @@ Changing a vector needs a pull request here (with the matching code change) and 
 ## Profile resolution
 
 `ProfileResolver` (`src/NexerAI.Core/Profiles`) normalizes every remote of the working copy, not only `origin`, and matches the keys against the `repos` of the profiles on the person's channel. Profile `repos` hold repository URLs, and both sides go through the same normalizer. The result is `Matched` (exactly one profile), `Unmatched` (the unknown-repository flow) or `Ambiguous` (several profiles, ordered by id for the error message). Every case carries the distinct remote keys for the profile request issue.
+
+## Stack detection
+
+`FileSystemStackDetector` (`src/NexerAI.Adapters/Stacks`) implements `IStackDetector` by walking the working copy. It skips `.git`, `bin`, `obj` and `node_modules` folders (not `packages`, which holds the sources of JavaScript monorepos), does not follow junctions or symbolic links, and ignores entries it cannot read. The signals, reported at most once each and in this order:
+
+| Signal | Found by | Suggested plugin |
+|---|---|---|
+| `Umbraco` | A `.csproj` with a `PackageReference` to `UmbracoCms` (Umbraco 8) or `Umbraco.Cms` / `Umbraco.Cms.*` (9 and later) | `nexer-dev-umbraco` |
+| `Playwright` | A `playwright.config.*` file | None; noted in the profile request issue for the QA role |
+| `Cypress` | A `cypress.config.*` file | None; noted in the profile request issue for the QA role |
+
+The rules live in one table in the detector. A new signal is one entry there, added together with the plugin it suggests.
 
 ## Build and test
 

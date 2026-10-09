@@ -7,6 +7,7 @@
     <InvariantGlobalization>true</InvariantGlobalization>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="..\NexerAI.Adapters\NexerAI.Adapters.csproj" />
     <ProjectReference Include="..\NexerAI.Core\NexerAI.Core.csproj" />
   </ItemGroup>
 </Project>
