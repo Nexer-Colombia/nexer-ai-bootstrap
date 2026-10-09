@@ -2,7 +2,7 @@ namespace NexerAI.Core.Domain;
 
 /// <summary>Per-project profile from the marketplace repository (design 4.3).</summary>
 /// <param name="Id">Profile identifier, for example <c>acme-website</c>.</param>
-/// <param name="Repos">Normalized repository remotes that select this profile.</param>
+/// <param name="Repos">Repository URLs in any network remote form git accepts (HTTPS, SSH URL, scp-like) that select this profile; matched after normalization with <see cref="Remotes.RemoteNormalizer"/>.</param>
 /// <param name="Owner">Tech lead who approves profile changes.</param>
 /// <param name="Plugins">Stack plugins only; role plugins never appear here.</param>
 /// <param name="Trackers">Issue trackers whose MCP servers the project uses.</param>

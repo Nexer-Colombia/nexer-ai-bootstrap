@@ -38,6 +38,10 @@ https://raw.githubusercontent.com/Nexer-Colombia/nexer-ai-bootstrap/<tag>/test-v
 
 Changing a vector needs a pull request here (with the matching code change) and a new tag; consumers then move their pin. The xUnit theory in `tests/NexerAI.Core.Tests/Remotes` runs every case, so a new vector needs no test code.
 
+## Profile resolution
+
+`ProfileResolver` (`src/NexerAI.Core/Profiles`) normalizes every remote of the working copy, not only `origin`, and matches the keys against the `repos` of the profiles on the person's channel. Profile `repos` hold repository URLs, and both sides go through the same normalizer. The result is `Matched` (exactly one profile), `Unmatched` (the unknown-repository flow) or `Ambiguous` (several profiles, ordered by id for the error message). Every case carries the distinct remote keys for the profile request issue.
+
 ## Build and test
 
 Requires the .NET SDK pinned in `global.json`. Tests run on Microsoft.Testing.Platform (configured in `global.json`).
