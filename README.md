@@ -27,6 +27,7 @@ The core is hexagonal: it depends only on these interfaces (`src/NexerAI.Core/Po
 | `IAgentInstaller` | Installed plugins, plugin install and MCP registration (Claude Code adapter only) |
 | `ICredentialStore` | Per-user tracker tokens keyed by tracker URL |
 | `IIssueReporter` | GitHub issues, for example a profile request for an unknown repository |
+| `IStateStore` | The per-user state file: read, and read-modify-write as one exclusive update |
 
 ## Test vectors
 
@@ -61,6 +62,26 @@ The rules live in one table in the detector. A new signal is one entry there, ad
 `DesiredState` (`src/NexerAI.Core/Planning`) lists the plugins and MCP servers a command wants present, all from the person's channel (the marketplace name). `ForMachine` covers `install`: `nexer-core`, the role plugin (`nexer-qa` for QA, `nexer-po` for PM/PO) and the opt-in `nexer-mod`, at user scope. `ForProject` covers `project`: the profile's stack plugins and `nexer-engram` when the profile uses it, at local scope, plus one local MCP server `nexer-<type>` per tracker that runs `<bin>\nexer-ai.exe mcp-launch --type <type> --url <url>` with no secret in it.
 
 `InstallPlanner` diffs it against what the agent reports and returns `InstallPlugin` and `AddMcpServer` actions, so a second run only fixes drift. A plugin counts as present when the same name, marketplace and scope is installed, whatever its version; an MCP server when the same name and scope is registered. Removing what is no longer wanted (it needs the state file), switching channel, credentials, plugin configuration values and drift in a server's command or arguments are not handled yet.
+
+## State file
+
+`%USERPROFILE%\.nexer-ai\state.json` records what the bootstrap installed: the channel (marketplace name), the role token, the user-scope plugin versions and, per project keyed by normalized remote, the matched profile and the local plugins and MCP servers. It never holds secrets.
+
+```json
+{
+  "schema": 1,
+  "channel": "nexer",
+  "role": "qa",
+  "installed": { "nexer-core": "1.2.0", "nexer-qa": "0.4.0" },
+  "projects": {
+    "github.com/acme/website": { "profile": "acme-website", "plugins": ["nexer-dev-umbraco", "nexer-engram"], "mcp": ["nexer-azure-devops"] }
+  }
+}
+```
+
+`StateFileFormat` (`src/NexerAI.Core/State`) reads and writes schema 1 with source-generated System.Text.Json: indented, LF line ends, keys sorted ordinally, unknown properties ignored, missing sections read as empty. A missing or different `schema`, malformed JSON, duplicate properties, an unknown channel or role, or a null entry raise `StateFileException`; the file is never silently reset.
+
+`FileStateStore` (`src/NexerAI.Adapters/State`) implements `IStateStore`. A missing file reads as the empty state. Two terminals may run `nexer-ai project` at once, so every update holds an exclusive lock on `state.json.lock` (kept between runs), reads the file, applies the change, writes a temporary file in the same folder, flushes it to disk and moves it over `state.json`. Waiting for the lock, and for other programs to close the file, is bounded (10 seconds by default) and honors cancellation. Reads take no lock: a reader sees the old or the new file, never half of one. The file is UTF-8 without BOM.
 
 ## Build and test
 
