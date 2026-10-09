@@ -56,6 +56,12 @@ Changing a vector needs a pull request here (with the matching code change) and 
 
 The rules live in one table in the detector. A new signal is one entry there, added together with the plugin it suggests.
 
+## Desired state and plan
+
+`DesiredState` (`src/NexerAI.Core/Planning`) lists the plugins and MCP servers a command wants present, all from the person's channel (the marketplace name). `ForMachine` covers `install`: `nexer-core`, the role plugin (`nexer-qa` for QA, `nexer-po` for PM/PO) and the opt-in `nexer-mod`, at user scope. `ForProject` covers `project`: the profile's stack plugins and `nexer-engram` when the profile uses it, at local scope, plus one local MCP server `nexer-<type>` per tracker that runs `<bin>\nexer-ai.exe mcp-launch --type <type> --url <url>` with no secret in it.
+
+`InstallPlanner` diffs it against what the agent reports and returns `InstallPlugin` and `AddMcpServer` actions, so a second run only fixes drift. A plugin counts as present when the same name, marketplace and scope is installed, whatever its version; an MCP server when the same name and scope is registered. Removing what is no longer wanted (it needs the state file), switching channel, credentials, plugin configuration values and drift in a server's command or arguments are not handled yet.
+
 ## Build and test
 
 Requires the .NET SDK pinned in `global.json`. Tests run on Microsoft.Testing.Platform (configured in `global.json`).
