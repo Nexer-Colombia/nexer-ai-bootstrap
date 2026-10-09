@@ -4,8 +4,8 @@ using NexerAI.Core.Domain;
 namespace NexerAI.Core.State;
 
 /// <summary>
-/// What the bootstrap has installed for the current user, kept in the state file.
-/// It never holds secrets.
+/// What the bootstrap has installed for the current user, kept in the state file (see
+/// <see cref="StateFileFormat"/>). It never holds secrets.
 /// </summary>
 /// <param name="Channel">The channel chosen by <c>nexer-ai install</c>; <see langword="null"/> before the first install.</param>
 /// <param name="Role">The role chosen by <c>nexer-ai install</c>; <see langword="null"/> before the first install.</param>
