@@ -1,4 +1,5 @@
 using NexerAI.Core.Domain;
+using NexerAI.Core.State;
 using NexerAI.Core.Tests.Fakes;
 
 namespace NexerAI.Core.Tests;
@@ -86,6 +87,21 @@ public sealed class FakesTests
         Assert.True(store.Exists(new Uri("https://dev.azure.com/acme")));
         Assert.Equal("token-1", store.Get(AzureDevOps));
         Assert.Null(store.Get(new Uri("https://acme.atlassian.net")));
+    }
+
+    [Fact]
+    public async Task StateStore_applies_updates_in_order_and_keeps_the_state_when_one_fails()
+    {
+        var store = new FakeStateStore();
+        var project = new ProjectState("acme-website", ["nexer-engram"], []);
+
+        var written = await store.UpdateAsync(s => s.WithProject("github.com/acme/website", project), CancellationToken.None);
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => store.UpdateAsync(_ => throw new InvalidOperationException("boom"), CancellationToken.None));
+
+        Assert.Same(written, await store.ReadAsync(CancellationToken.None));
+        Assert.Same(project, written.Projects["github.com/acme/website"]);
+        Assert.Equal(1, store.UpdateCount);
     }
 
     [Fact]

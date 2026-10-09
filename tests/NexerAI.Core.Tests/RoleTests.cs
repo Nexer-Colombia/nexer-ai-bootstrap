@@ -29,6 +29,16 @@ public sealed class RoleTests
     }
 
     [Fact]
+    public void Parse_maps_a_token_and_rejects_anything_else_naming_the_tokens()
+    {
+        Assert.Equal(Role.Qa, RoleTokens.Parse("qa"));
+
+        var error = Assert.Throws<ArgumentException>(() => RoleTokens.Parse("QA"));
+        Assert.Contains("'QA'", error.Message, StringComparison.Ordinal);
+        Assert.Contains("developer, qa, po", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void All_lists_the_tokens_in_question_order()
     {
         Assert.Equal(["developer", "qa", "po"], RoleTokens.All);
