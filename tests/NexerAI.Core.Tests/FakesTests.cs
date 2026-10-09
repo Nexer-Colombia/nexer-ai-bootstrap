@@ -57,15 +57,21 @@ public sealed class FakesTests
     [Fact]
     public async Task AgentInstaller_reports_configured_plugins_and_records_changes()
     {
-        var installer = new FakeAgentInstaller { Installed = [new InstalledPlugin("nexer-core", "1.2.0", PluginScope.User)] };
-        var install = new PluginInstallRequest("nexer-qa", PluginScope.User, new Dictionary<string, string>());
+        var installer = new FakeAgentInstaller
+        {
+            Installed = [new InstalledPlugin("nexer-core", "nexer", "1.2.0", PluginScope.User)],
+            InstalledMcpServers = [new InstalledMcpServer("nexer-testrail", PluginScope.Local)],
+        };
+        var install = new PluginInstallRequest("nexer-qa", "nexer", PluginScope.User, new Dictionary<string, string>());
         var mcp = new McpServerRegistration("nexer-jira", PluginScope.Local, "nexer-ai", ["mcp-launch", "jira"]);
 
         var installed = await installer.GetInstalledPluginsAsync(CancellationToken.None);
+        var servers = await installer.GetMcpServersAsync(CancellationToken.None);
         await installer.InstallPluginAsync(install, CancellationToken.None);
         await installer.AddMcpServerAsync(mcp, CancellationToken.None);
 
-        Assert.Equal("nexer-core", Assert.Single(installed).Name);
+        Assert.Equal("nexer", Assert.Single(installed).Marketplace);
+        Assert.Equal("nexer-testrail", Assert.Single(servers).Name);
         Assert.Equal([install], installer.InstallRequests);
         Assert.Equal([mcp], installer.McpRegistrations);
     }
