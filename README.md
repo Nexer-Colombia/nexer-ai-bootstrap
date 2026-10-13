@@ -28,6 +28,7 @@ The core is hexagonal: it depends only on these interfaces (`src/NexerAI.Core/Po
 | `ICredentialStore` | Per-user tracker tokens keyed by tracker URL |
 | `IIssueReporter` | GitHub issues, for example a profile request for an unknown repository |
 | `IStateStore` | The per-user state file: read, and read-modify-write as one exclusive update |
+| `IReadOnlyFileSystem` | Folder and file checks and UTF-8 reads, for example of the git files behind a task key |
 
 ## Test vectors
 
@@ -84,6 +85,15 @@ The rules live in one table in the detector. A new signal is one entry there, ad
 `StateFileFormat` (`src/NexerAI.Core/State`) reads and writes schema 1 with source-generated System.Text.Json: indented, LF line ends, keys sorted ordinally, unknown properties ignored, missing sections read as empty. A missing or different `schema`, malformed JSON, duplicate properties, an unknown channel or role, or a null entry raise `StateFileException`; the file is never silently reset.
 
 `FileStateStore` (`src/NexerAI.Adapters/State`) implements `IStateStore`. A missing file reads as the empty state. Two terminals may run `nexer-ai project` at once, so every update holds an exclusive lock on `state.json.lock` (kept between runs), reads the file, applies the change, writes a temporary file in the same folder, flushes it to disk and moves it over `state.json`. Waiting for the lock, and for other programs to close the file, is bounded (10 seconds by default) and honors cancellation. Reads take no lock: a reader sees the old or the new file, never half of one. The file is UTF-8 without BOM.
+
+## Task key
+
+The Nexer mod adds up agent time per task, and a task is a branch of a working copy: `<repository root>#<branch>`, for example `c:/work/acme-website#feature/12345-header`. Both are local values that never leave the machine. `TaskKeyResolver` (`src/NexerAI.Core/Tasks`) computes it by reading git files through `IReadOnlyFileSystem`, without starting git:
+
+- The root is the first folder, walking up from the working directory, that contains `.git`, either a folder with a `HEAD` file (like git, a `.git` folder without one is skipped) or a file (worktree, submodule) whose `gitdir:` line names the git folder; a relative `gitdir:` starts at the folder of the `.git` file. Drive (`c:/`) and UNC (`//server/share`) paths are accepted, lowercased with forward slashes.
+- The branch comes from `HEAD` in the git folder, `ref: refs/heads/<branch>`, with its case kept. A detached HEAD, a ref outside `refs/heads/` (`git branch --show-current` prints nothing), the reftable placeholder `.invalid` and a missing or unreadable file give no key.
+
+`TaskKey.Sha256`, the lowercase hex SHA-256 of the UTF-8 key, names the task file `%USERPROFILE%\.nexer-ai\tasks\<sha256>.json`.
 
 ## Build and test
 
