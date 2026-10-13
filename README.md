@@ -33,13 +33,15 @@ The core is hexagonal: it depends only on these interfaces (`src/NexerAI.Core/Po
 
 `test-vectors/remotes.json` defines how a git remote is normalized to the canonical `host/path` key that `nexer-ai project` matches against the `repos` of project profiles. Each case has an `input`, the `expected` key (`null` means the input must be rejected) and a `note` with the reason.
 
-The file is a contract. Marketplace CI applies the same rule to reject two profiles that list the same remote, and the Nexer mod will use it later; every implementation must pass every case. This repository is the only source: consumers download the file pinned to a bootstrap tag, never to a branch:
+`test-vectors/task-keys.json` defines the task key `<repository root>#<branch>` of a working directory, which the Nexer mod uses to add up agent time per task. Each case has a `name`, a Windows file tree in `files` (paths match case-insensitively and every parent of a file is a folder), the `cwd`, and the `expected` key with its `sha256` (the task file name), or `null` when the directory has no task.
+
+The files are contracts. Marketplace CI applies the remote rule to reject two profiles that list the same remote, the Nexer mod will use both files and the task skill the task keys; every implementation must pass every case. This repository is the only source: consumers download a file pinned to a bootstrap tag, never to a branch:
 
 ```text
 https://raw.githubusercontent.com/Nexer-Colombia/nexer-ai-bootstrap/<tag>/test-vectors/remotes.json
 ```
 
-Changing a vector needs a pull request here (with the matching code change) and a new tag; consumers then move their pin. The xUnit theory in `tests/NexerAI.Core.Tests/Remotes` runs every case, so a new vector needs no test code.
+Changing a vector needs a pull request here (with the matching code change) and a new tag; consumers then move their pin. The xUnit theories in `tests/NexerAI.Core.Tests/Remotes` and `tests/NexerAI.Core.Tests/Tasks` run every case, so a new vector needs no test code.
 
 ## Profile resolution
 

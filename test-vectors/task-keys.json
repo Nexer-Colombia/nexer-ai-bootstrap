@@ -1,0 +1,149 @@
+{
+  "schema": 1,
+  "description": "Task key: '<repository root>#<branch>' for a working directory, or null when it has no task. The root is the first folder, walking up from cwd, that contains .git (a folder with a HEAD file, since git skips one without it, or a file whose 'gitdir:' line names the git folder); its path is lowercased with forward slashes. The branch comes from HEAD in the git folder and must be under refs/heads/. files is a Windows file tree: paths match case-insensitively and every parent of a file is a folder. sha256 is the lowercase hex SHA-256 of the UTF-8 key, the task file name without '.json'. Shared contract between the nexer-ai bootstrap, the Nexer mod and the task skill.",
+  "cases": [
+    {
+      "name": "Working directory at the repository root",
+      "files": { "c:/work/acme/.git/HEAD": "ref: refs/heads/main\n" },
+      "cwd": "C:\\work\\acme",
+      "expected": { "key": "c:/work/acme#main", "sha256": "5f3c373f73d7eb8647cf654d4162aeb51864f5d0b5c43777843f745b4f16bbe5" }
+    },
+    {
+      "name": "Working directory in a nested subfolder",
+      "files": { "c:/work/acme/.git/HEAD": "ref: refs/heads/main\n", "c:/work/acme/src/web/views/index.cshtml": "" },
+      "cwd": "C:\\work\\acme\\src\\web\\views",
+      "expected": { "key": "c:/work/acme#main", "sha256": "5f3c373f73d7eb8647cf654d4162aeb51864f5d0b5c43777843f745b4f16bbe5" }
+    },
+    {
+      "name": "Mixed case, doubled and trailing separators in the working directory",
+      "files": { "c:/work/acme/.git/HEAD": "ref: refs/heads/main\n" },
+      "cwd": "C:\\Work\\\\ACME\\",
+      "expected": { "key": "c:/work/acme#main", "sha256": "5f3c373f73d7eb8647cf654d4162aeb51864f5d0b5c43777843f745b4f16bbe5" }
+    },
+    {
+      "name": "Working directory with forward slashes, as git prints it",
+      "files": { "c:/work/acme/.git/HEAD": "ref: refs/heads/main\n" },
+      "cwd": "C:/Work/Acme/src",
+      "expected": { "key": "c:/work/acme#main", "sha256": "5f3c373f73d7eb8647cf654d4162aeb51864f5d0b5c43777843f745b4f16bbe5" }
+    },
+    {
+      "name": "Branch with slashes",
+      "files": { "c:/work/acme/.git/HEAD": "ref: refs/heads/feature/12345-header\n" },
+      "cwd": "C:\\work\\acme",
+      "expected": { "key": "c:/work/acme#feature/12345-header", "sha256": "fb0b9f7268d8c0eaea143b1b125a4c399d5f2c02a62e632b48b5ebb93ce8706c" }
+    },
+    {
+      "name": "Branch case is kept, only the path is lowercased",
+      "files": { "c:/work/acme/.git/HEAD": "ref: refs/heads/Feature/ABC-12\n" },
+      "cwd": "C:\\Work\\Acme",
+      "expected": { "key": "c:/work/acme#Feature/ABC-12", "sha256": "7a09c7726db35c98a5eb8168c6ee57b10b6f51526afdc952039b043fde4d31e8" }
+    },
+    {
+      "name": "CRLF and trailing whitespace in HEAD are ignored",
+      "files": { "c:/work/acme/.git/HEAD": "ref: refs/heads/main \r\n" },
+      "cwd": "C:\\work\\acme",
+      "expected": { "key": "c:/work/acme#main", "sha256": "5f3c373f73d7eb8647cf654d4162aeb51864f5d0b5c43777843f745b4f16bbe5" }
+    },
+    {
+      "name": "No space after 'ref:' in HEAD, which git accepts",
+      "files": { "c:/work/acme/.git/HEAD": "ref:refs/heads/main\n" },
+      "cwd": "C:\\work\\acme",
+      "expected": { "key": "c:/work/acme#main", "sha256": "5f3c373f73d7eb8647cf654d4162aeb51864f5d0b5c43777843f745b4f16bbe5" }
+    },
+    {
+      "name": "Detached HEAD has no task",
+      "files": { "c:/work/acme/.git/HEAD": "3f786850e387550fdab836ed7e6dc881de23001b\n" },
+      "cwd": "C:\\work\\acme",
+      "expected": null
+    },
+    {
+      "name": "HEAD outside refs/heads has no task, as git branch --show-current prints nothing",
+      "files": { "c:/work/acme/.git/HEAD": "ref: refs/remotes/origin/main\n" },
+      "cwd": "C:\\work\\acme",
+      "expected": null
+    },
+    {
+      "name": "Reftable placeholder HEAD has no task, as .invalid is not a valid branch name",
+      "files": { "c:/work/acme/.git/HEAD": "ref: refs/heads/.invalid\n" },
+      "cwd": "C:\\work\\acme",
+      "expected": null
+    },
+    {
+      "name": "No .git in any parent folder",
+      "files": { "c:/work/notes/readme.md": "# Notes\n" },
+      "cwd": "C:\\work\\notes",
+      "expected": null
+    },
+    {
+      "name": "A .git folder without a HEAD is not a repository, as for git: the walk goes on",
+      "files": { "c:/work/acme/.git/HEAD": "ref: refs/heads/main\n", "c:/work/acme/tools/.git/config": "" },
+      "cwd": "C:\\work\\acme\\tools",
+      "expected": { "key": "c:/work/acme#main", "sha256": "5f3c373f73d7eb8647cf654d4162aeb51864f5d0b5c43777843f745b4f16bbe5" }
+    },
+    {
+      "name": "A .git folder without a HEAD and no repository above it",
+      "files": { "c:/work/tools/.git/config": "" },
+      "cwd": "C:\\work\\tools",
+      "expected": null
+    },
+    {
+      "name": "Nested repository: the inner .git wins",
+      "files": {
+        "c:/work/acme/.git/HEAD": "ref: refs/heads/main\n",
+        "c:/work/acme/vendor/lib/.git/HEAD": "ref: refs/heads/develop\n"
+      },
+      "cwd": "C:\\work\\acme\\vendor\\lib\\src",
+      "expected": { "key": "c:/work/acme/vendor/lib#develop", "sha256": "7c2add571e1898d75608385ea91d6bd1cb68f0cebec5298ad802614e10ea28d1" }
+    },
+    {
+      "name": "Worktree: .git file with an absolute gitdir",
+      "files": {
+        "c:/work/acme/.git/HEAD": "ref: refs/heads/main\n",
+        "c:/work/acme/.git/worktrees/acme-header/HEAD": "ref: refs/heads/feature/12345-header\n",
+        "c:/work/acme-header/.git": "gitdir: C:/work/acme/.git/worktrees/acme-header\n"
+      },
+      "cwd": "C:\\work\\acme-header\\src",
+      "expected": { "key": "c:/work/acme-header#feature/12345-header", "sha256": "a9d29cdbf877e36f17e7043551837d14d2ce0ccb55b632902e4cad64bdd0c109" }
+    },
+    {
+      "name": "Submodule: .git file with a relative gitdir and CRLF, resolved from the folder of the .git file",
+      "files": {
+        "c:/work/acme/.git/HEAD": "ref: refs/heads/develop\n",
+        "c:/work/acme/.git/modules/libs/shared/HEAD": "ref: refs/heads/main\n",
+        "c:/work/acme/libs/shared/.git": "gitdir: ../../.git/modules/libs/shared\r\n"
+      },
+      "cwd": "C:\\work\\acme\\libs\\shared",
+      "expected": { "key": "c:/work/acme/libs/shared#main", "sha256": "b38eabe4bfe01c424890437a5f392d10e3eb3f6baf7703929f64253ed368dcdd" }
+    },
+    {
+      "name": "A .git file whose gitdir does not exist has no task",
+      "files": { "c:/work/acme-old/.git": "gitdir: C:/work/acme/.git/worktrees/acme-old\n" },
+      "cwd": "C:\\work\\acme-old",
+      "expected": null
+    },
+    {
+      "name": "A .git file without a gitdir line has no task",
+      "files": { "c:/work/acme/.git": "ref: refs/heads/main\n" },
+      "cwd": "C:\\work\\acme",
+      "expected": null
+    },
+    {
+      "name": "UNC path",
+      "files": { "//fileserver/projects/acme/.git/HEAD": "ref: refs/heads/main\n" },
+      "cwd": "\\\\FileServer\\Projects\\Acme\\src",
+      "expected": { "key": "//fileserver/projects/acme#main", "sha256": "37260f9e137509675a0b409a521cddcea376f768679a4dedec5ed506edb682d1" }
+    },
+    {
+      "name": "Non-ASCII letters lowercase the same in every implementation",
+      "files": { "c:/users/josé/source/app/.git/HEAD": "ref: refs/heads/main\n" },
+      "cwd": "C:\\Users\\JOSÉ\\source\\app",
+      "expected": { "key": "c:/users/josé/source/app#main", "sha256": "180f921b7590926208b72761fef89b1fba26758cb9f62a857887e4d73da29e58" }
+    },
+    {
+      "name": "Repository at a drive root",
+      "files": { "d:/.git/HEAD": "ref: refs/heads/main\n" },
+      "cwd": "D:\\tools",
+      "expected": { "key": "d:/#main", "sha256": "da955bf6a2c8e43aff558476c3273a8dae5c7fb188d70e1ac63c3c7d5fb05547" }
+    }
+  ]
+}
