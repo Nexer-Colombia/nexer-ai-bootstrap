@@ -105,6 +105,21 @@ public sealed class FakesTests
     }
 
     [Fact]
+    public void FileSystem_matches_paths_like_windows_and_implies_parent_folders()
+    {
+        var files = new FakeFileSystem(new Dictionary<string, string> { ["c:/work/acme/.git/HEAD"] = "ref: refs/heads/main" });
+
+        Assert.True(files.DirectoryExists(@"C:\Work\Acme\.git"));
+        Assert.True(files.DirectoryExists("c:/work/"));
+        Assert.False(files.DirectoryExists("c:/work/acme/.git/HEAD"));
+        Assert.True(files.FileExists("C:/WORK/acme/.git/head"));
+        Assert.False(files.FileExists("c:/work/acme/.git"));
+        Assert.Equal("ref: refs/heads/main", files.ReadAllText(@"c:\work\acme\.git\HEAD"));
+        Assert.Null(files.ReadAllText("c:/work/acme/.git/config"));
+        Assert.Equal([@"c:\work\acme\.git\HEAD", "c:/work/acme/.git/config"], files.ReadPaths);
+    }
+
+    [Fact]
     public async Task IssueReporter_records_drafts_and_returns_the_configured_url()
     {
         var reporter = new FakeIssueReporter { IssueUrl = new Uri("https://github.com/o/r/issues/7") };
