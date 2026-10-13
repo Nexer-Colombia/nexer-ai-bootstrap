@@ -95,6 +95,8 @@ The Nexer mod adds up agent time per task, and a task is a branch of a working c
 
 `TaskKey.Sha256`, the lowercase hex SHA-256 of the UTF-8 key, names the task file `%USERPROFILE%\.nexer-ai\tasks\<sha256>.json`.
 
+`LocalFileSystem` (`src/NexerAI.Adapters/FileSystem`) implements `IReadOnlyFileSystem` on the real file system; a file that is missing, a folder, locked or denied reads as `null`.
+
 ## Build and test
 
 Requires the .NET SDK pinned in `global.json`. Tests run on Microsoft.Testing.Platform (configured in `global.json`).
