@@ -1,0 +1,11 @@
+{
+  "version": "2.1.299",
+  "prompt_cache": {
+    "warm": false,
+    "caching_observed": false,
+    "ttl": "5m",
+    "expires_at": null,
+    "requests": 1,
+    "misses": 1
+  }
+}
