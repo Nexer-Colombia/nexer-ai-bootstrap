@@ -13,7 +13,7 @@ public sealed class StatusLineInputParserTests
     [Fact]
     public void Parse_reads_the_input_recorded_before_the_first_response()
     {
-        Assert.Equal(new StatusLineInput(null), Parse(Sample("before-first-response.json")));
+        Assert.Equal(new StatusLineInput(null, Session), Parse(Sample("before-first-response.json")));
     }
 
     [Fact]
@@ -21,7 +21,39 @@ public sealed class StatusLineInputParserTests
     {
         var input = Parse(Sample("warm-cache.json"));
 
-        Assert.Equal(new PromptCacheState(true, "5m", At(1791998012)), input.PromptCache);
+        Assert.Equal(new StatusLineInput(new PromptCacheState(true, "5m", At(1791998012), 3), Session), input);
+    }
+
+    [Theory]
+    [InlineData("{\"session_id\": 42}")]
+    [InlineData("{\"session_id\": null}")]
+    [InlineData("{\"session_id\": [\"a\"]}")]
+    [InlineData("{\"prompt_cache\": {\"warm\": true, \"session_id\": \"nested\"}}")]
+    public void Parse_reads_a_missing_or_mistyped_session_id_as_unknown(string json)
+    {
+        Assert.Null(Parse(json).SessionId);
+    }
+
+    [Fact]
+    public void Parse_reads_the_session_end_hook_input()
+    {
+        // SessionEnd hook input: https://code.claude.com/docs/en/hooks#sessionend
+        var input = Parse("{\"session_id\": \"abc-123\", \"hook_event_name\": \"SessionEnd\", \"reason\": \"clear\"}");
+
+        Assert.Equal(new StatusLineInput(null, "abc-123"), input);
+    }
+
+    [Theory]
+    [InlineData("\"requests\": \"3\"")]
+    [InlineData("\"requests\": null")]
+    [InlineData("\"requests\": 3.5")]
+    [InlineData("\"requests\": -1")]
+    [InlineData("\"requests\": 99999999999999999999")]
+    public void Parse_reads_a_mistyped_or_negative_request_count_as_unknown(string requests)
+    {
+        var input = Parse("{\"prompt_cache\": {\"warm\": true, " + requests + "}}");
+
+        Assert.Equal(new PromptCacheState(true, null, null, null), input.PromptCache);
     }
 
     [Theory]
@@ -85,6 +117,8 @@ public sealed class StatusLineInputParserTests
 
         Assert.Equal(new StatusLineInput(new PromptCacheState(false, null, null)), input);
     }
+
+    private const string Session = "00000000-0000-4000-8000-000000000001";
 
     private static StatusLineInput Parse(string json) =>
         StatusLineInputParser.Parse(json) ?? throw new InvalidOperationException("The input was unreadable.");

@@ -177,6 +177,111 @@ public sealed class CacheTimerLineTests
         Assert.Equal("◷ cache 4m left", Format(new PromptCacheState(true, ttl, Now.AddMinutes(4))));
     }
 
+    [Theory]
+    [InlineData(-10 * 60, 290, "◷ cache ~55m left (5m)")]
+    [InlineData(-1, 300, "◷ cache ~65m left (5m)")]
+    [InlineData(-60 * 60 + 1, 300, "◷ cache ~6m left (5m)")]
+    [InlineData(-59 * 60, 600, "◷ cache ~10m left (5m)")]
+    public void Format_estimates_until_an_hour_after_the_last_response_plus_the_ttl_once_renewal_was_seen(
+        long lastResponseIn, long expiresIn, string expected)
+    {
+        // The estimate never shows less than the exact expires_at countdown.
+        var session = new CacheSession(3, Now.AddSeconds(lastResponseIn), RenewalSeen: true);
+
+        var line = CacheTimerLine.Format(Warm("5m", expiresIn), Now, color: false, session);
+
+        Assert.Equal(expected, line);
+    }
+
+    [Theory]
+    [InlineData(0, 300, "◷ cache ~65m left (5m)")]
+    [InlineData(74, 300, "◷ cache ~64m left (5m)")]
+    [InlineData(75, 300, "◷ cache ~64m left (5m)")]
+    [InlineData(76, 300, "◷ cache 4m left (5m)")]
+    [InlineData(240, 300, "◷ cache 1m left (5m)")]
+    public void Format_estimates_right_after_the_response_and_corrects_itself_after_75_seconds_without_a_renewal(
+        long secondsSinceResponse, long expiresAfterResponse, string expected)
+    {
+        // Right after a response the cache is warm for at least one ttl, so an early estimate cannot mislead.
+        var session = new CacheSession(3, Now, RenewalSeen: false);
+        var cache = new PromptCacheState(true, "5m", Now.AddSeconds(expiresAfterResponse), 3);
+
+        var line = CacheTimerLine.Format(new StatusLineInput(cache), Now.AddSeconds(secondsSinceResponse), false, session);
+
+        Assert.Equal(expected, line);
+    }
+
+    [Fact]
+    public void Format_keeps_the_estimate_after_75_seconds_once_a_renewal_was_seen()
+    {
+        var session = new CacheSession(3, Now, RenewalSeen: true);
+
+        var line = CacheTimerLine.Format(Warm("5m", 300 - 76), Now.AddSeconds(76), false, session);
+
+        Assert.Equal("◷ cache ~64m left (5m)", line);
+    }
+
+    [Fact]
+    public void Format_brings_the_estimate_back_when_a_renewal_arrives_after_75_seconds()
+    {
+        var anchored = new CacheSession(3, Now, false);
+        var later = Now.AddSeconds(120);
+        var renewedCache = new PromptCacheState(true, "5m", later.AddMinutes(5), 3);
+
+        var exact = CacheTimerLine.Format(Warm("5m", 300), later, false, anchored);
+        var estimate = CacheTimerLine.Format(
+            new StatusLineInput(renewedCache), later, false, CacheSession.Next(anchored, renewedCache));
+
+        Assert.Equal("◷ cache 3m left (5m)", exact);
+        Assert.Equal("◷ cache ~63m left (5m)", estimate);
+    }
+
+    [Fact]
+    public void Format_colors_the_estimate_by_the_warning_window()
+    {
+        var green = new CacheSession(3, Now.AddMinutes(-10), true);
+        var yellow = new CacheSession(3, Now.AddMinutes(-60).AddSeconds(10), true);
+
+        Assert.Equal($"{Green}◷ cache ~55m left (5m){Reset}", CacheTimerLine.Format(Warm("5m", 290), Now, color: true, green));
+        Assert.Equal($"{Yellow}◷ cache ~1m left (30s){Reset}", CacheTimerLine.Format(Warm("30s", 20), Now, color: true, yellow));
+    }
+
+    [Theory]
+    [InlineData(false, -600L, "5m", 290L)]
+    [InlineData(true, null, "5m", 290L)]
+    [InlineData(true, -3600L, "5m", 290L)]
+    [InlineData(true, -4000L, "5m", 290L)]
+    [InlineData(true, -600L, null, 290L)]
+    [InlineData(true, -600L, "5d", 290L)]
+    public void Format_shows_the_exact_countdown_when_the_estimate_does_not_apply(
+        bool renewalSeen, long? lastResponseIn, string? ttl, long expiresIn)
+    {
+        var lastResponseAt = lastResponseIn is { } seconds ? Now.AddSeconds(seconds) : (DateTimeOffset?)null;
+        var session = new CacheSession(3, lastResponseAt, renewalSeen);
+
+        var line = CacheTimerLine.Format(Warm(ttl, expiresIn), Now, color: false, session);
+
+        Assert.Equal(ttl == "5m" ? "◷ cache 5m left (5m)" : "◷ cache 5m left", line);
+    }
+
+    [Theory]
+    [InlineData(false, 290L)]
+    [InlineData(true, null)]
+    [InlineData(true, 0L)]
+    public void Format_shows_a_cold_cache_even_with_a_renewal_seen(bool warm, long? expiresIn)
+    {
+        var expiresAt = expiresIn is { } seconds ? Now.AddSeconds(seconds) : (DateTimeOffset?)null;
+        var session = new CacheSession(3, Now.AddMinutes(-10), true);
+
+        var line = CacheTimerLine.Format(
+            new StatusLineInput(new PromptCacheState(warm, "5m", expiresAt, 3)), Now, color: false, session);
+
+        Assert.Equal("◷ cache cold", line);
+    }
+
+    private static StatusLineInput Warm(string? ttl, long expiresIn) =>
+        new(new PromptCacheState(true, ttl, Now.AddSeconds(expiresIn), 3));
+
     private static string Format(PromptCacheState cache) =>
         CacheTimerLine.Format(new StatusLineInput(cache), Now, color: false);
 
