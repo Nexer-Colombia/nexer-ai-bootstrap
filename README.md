@@ -2,7 +2,7 @@
 
 Installer for the Nexer Colombia AI adoption program. `nexer-ai` installs Claude Code plus the plugins and MCP servers approved for a person's role and project on Windows, without admin rights, and keeps them up to date. It is a C# (.NET 10) console app published as a single Native AOT executable for `win-x64`. This repository holds only the installer and contains no secrets.
 
-Status: skeleton. Only `nexer-ai --version` works; `install`, `project`, `doctor`, `statusline` and `mcp-launch` come next.
+Status: skeleton. `nexer-ai --version` and `nexer-ai statusline` work; `install`, `project`, `doctor` and `mcp-launch` come next.
 
 ## Layout
 
@@ -96,6 +96,19 @@ The Nexer mod adds up agent time per task, and a task is a branch of a working c
 `TaskKey.Sha256`, the lowercase hex SHA-256 of the UTF-8 key, names the task file `%USERPROFILE%\.nexer-ai\tasks\<sha256>.json`.
 
 `LocalFileSystem` (`src/NexerAI.Adapters/FileSystem`) implements `IReadOnlyFileSystem` on the real file system; a file that is missing, a folder, locked or denied reads as `null`.
+
+## Status line
+
+`nexer-ai statusline` is a Claude Code status line command: it reads the status line JSON on stdin and prints one line with the prompt cache time left. It shows only the cache because the Nexer mod draws the other live metrics and the mods API does not expose the cache. `StatusLineInputParser` (`src/NexerAI.Core/StatusLine`) reads `prompt_cache` and never throws; `CacheTimerLine` formats it against the current time:
+
+| Input | Output |
+|---|---|
+| Unreadable, or no `prompt_cache` (before the first response) | `cache -` |
+| Not `warm`, `expires_at` null, or `expires_at` reached | `cache cold` |
+| Warm, 4 minutes left, `ttl` `5m` | `cache 4m left (5m)` |
+| Warm, 51 minutes 30 seconds left, `ttl` `1h` | `cache 52m left (1h)` |
+
+The time left is rounded up to whole minutes. The ttl is shown only when it is one to three digits and `s`, `m` or `h`, so no other input text reaches the terminal. The command always exits 0. Claude Code re-runs it when a warm cache reaches `expires_at`; `install` will set `refreshInterval` for the countdown in between.
 
 ## Build and test
 
