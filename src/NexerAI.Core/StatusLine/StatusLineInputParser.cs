@@ -36,35 +36,17 @@ public static class StatusLineInputParser
         }
     }
 
-    private static StatusLineInput Read(JsonElement root)
-    {
-        var rateLimits = Child(root, "rate_limits");
-        return new StatusLineInput(
-            Number(Child(root, "context_window"), "used_percentage"),
-            ReadPromptCache(Child(root, "prompt_cache")),
-            ReadWindow(Child(rateLimits, "five_hour")),
-            ReadWindow(Child(rateLimits, "seven_day")),
-            Money(Child(root, "cost"), "total_cost_usd"),
-            Text(Child(root, "effort"), "level"));
-    }
+    private static StatusLineInput Read(JsonElement root) =>
+        new(ReadPromptCache(Child(root, "prompt_cache")));
 
     private static PromptCacheState? ReadPromptCache(JsonElement? cache) =>
         Property(cache, "warm") is { ValueKind: JsonValueKind.True or JsonValueKind.False } warm
             ? new PromptCacheState(warm.GetBoolean(), Text(cache, "ttl"), UnixTime(cache, "expires_at"))
             : null;
 
-    private static RateLimitWindow? ReadWindow(JsonElement? window) =>
-        Number(window, "used_percentage") is { } used ? new RateLimitWindow(used, UnixTime(window, "resets_at")) : null;
-
     /// <summary>The named property of <paramref name="parent"/> when it is an object.</summary>
     private static JsonElement? Child(JsonElement? parent, string name) =>
         Property(parent, name, JsonValueKind.Object);
-
-    private static double? Number(JsonElement? parent, string name) =>
-        Property(parent, name, JsonValueKind.Number) is { } number && number.TryGetDouble(out var value) ? value : null;
-
-    private static decimal? Money(JsonElement? parent, string name) =>
-        Property(parent, name, JsonValueKind.Number) is { } number && number.TryGetDecimal(out var value) ? value : null;
 
     private static string? Text(JsonElement? parent, string name) =>
         Property(parent, name, JsonValueKind.String)?.GetString();
