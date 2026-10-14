@@ -37,11 +37,17 @@ public static class StatusLineInputParser
     }
 
     private static StatusLineInput Read(JsonElement root) =>
-        new(ReadPromptCache(Child(root, "prompt_cache")));
+        new(ReadPromptCache(Child(root, "prompt_cache")), Text(root, "session_id"));
 
     private static PromptCacheState? ReadPromptCache(JsonElement? cache) =>
         Property(cache, "warm") is { ValueKind: JsonValueKind.True or JsonValueKind.False } warm
-            ? new PromptCacheState(warm.GetBoolean(), Text(cache, "ttl"), UnixTime(cache, "expires_at"))
+            ? new PromptCacheState(
+                warm.GetBoolean(), Text(cache, "ttl"), UnixTime(cache, "expires_at"), Count(cache, "requests"))
+            : null;
+
+    private static long? Count(JsonElement? parent, string name) =>
+        Property(parent, name, JsonValueKind.Number) is { } number && number.TryGetInt64(out var count) && count >= 0
+            ? count
             : null;
 
     /// <summary>The named property of <paramref name="parent"/> when it is an object.</summary>
