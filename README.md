@@ -101,14 +101,15 @@ The Nexer mod adds up agent time per task, and a task is a branch of a working c
 
 `nexer-ai statusline` is a Claude Code status line command: it reads the status line JSON on stdin and prints one line with the prompt cache time left. It shows only the cache because the Nexer mod draws the other live metrics and the mods API does not expose the cache. `StatusLineInputParser` (`src/NexerAI.Core/StatusLine`) reads `prompt_cache` and never throws; `CacheTimerLine` formats it against the current time:
 
-| Input | Output |
-|---|---|
-| Unreadable, or no `prompt_cache` (before the first response) | `cache -` |
-| Not `warm`, `expires_at` null, or `expires_at` reached | `cache cold` |
-| Warm, 4 minutes left, `ttl` `5m` | `cache 4m left (5m)` |
-| Warm, 51 minutes 30 seconds left, `ttl` `1h` | `cache 52m left (1h)` |
+| Input | Output | Color |
+|---|---|---|
+| Unreadable, or no `prompt_cache` (before the first response) | `◷ cache -` | gray |
+| Not `warm`, `expires_at` null, or `expires_at` reached | `◷ cache cold` | gray |
+| Warm, 4 minutes left, `ttl` `5m` | `◷ cache 4m left (5m)` | green |
+| Warm, 51 minutes 30 seconds left, `ttl` `1h` | `◷ cache 52m left (1h)` | green |
+| Warm, 50 seconds left, `ttl` `5m` | `◷ cache 1m left (5m)` | yellow |
 
-The time left is rounded up to whole minutes. The ttl is shown only when it is one to three digits and `s`, `m` or `h`, so no other input text reaches the terminal. The command always exits 0. Claude Code re-runs it when a warm cache reaches `expires_at`; `install` will set `refreshInterval` for the countdown in between.
+The time left is rounded up to whole minutes. A warm cache turns yellow when the exact time left is at most the warning window: 20% of the ttl, clamped to 60 to 300 seconds (`5m` gives 60 seconds, `1h` gives 300), or 60 seconds when the ttl is unknown. Colors are ANSI codes (`32` green, `33` yellow, `90` gray) and each line ends with a reset; when `NO_COLOR` is set and not empty ([no-color.org](https://no-color.org)) the same text is printed without them. Output is UTF-8 without a BOM. The ttl is shown only when it is one to three digits and `s`, `m` or `h`, so no other input text reaches the terminal. The command always exits 0. Claude Code re-runs it when a warm cache reaches `expires_at`; `install` will set `refreshInterval` for the countdown in between.
 
 ## Build and test
 
