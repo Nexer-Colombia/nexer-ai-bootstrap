@@ -25,8 +25,14 @@ if (args is ["statusline"])
         json = string.Empty;
     }
 
+    // no-color.org: NO_COLOR present and not empty turns colors off.
+    var color = string.IsNullOrEmpty(Environment.GetEnvironmentVariable("NO_COLOR"));
+    var line = CacheTimerLine.Format(StatusLineInputParser.Parse(json), DateTimeOffset.UtcNow, color);
+
+    // UTF-8 bytes without a BOM, whatever the console code page, so the clock glyph survives Git Bash.
     // LF only: Claude Code shows each output line as a status line row.
-    Console.Out.Write(CacheTimerLine.Format(StatusLineInputParser.Parse(json), DateTimeOffset.UtcNow) + "\n");
+    using var stdout = Console.OpenStandardOutput();
+    stdout.Write(Encoding.UTF8.GetBytes(line + "\n"));
     return 0;
 }
 
