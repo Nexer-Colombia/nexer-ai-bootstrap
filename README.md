@@ -29,6 +29,7 @@ The core is hexagonal: it depends only on these interfaces (`src/NexerAI.Core/Po
 | `IIssueReporter` | GitHub issues, for example a profile request for an unknown repository |
 | `IStateStore` | The per-user state file: read, and read-modify-write as one exclusive update |
 | `IReadOnlyFileSystem` | Folder and file checks and UTF-8 reads, for example of the git files behind a task key |
+| `ISessionCacheStore` | The status line's memory of each session: load, save, delete and sweep; never throws |
 
 ## Test vectors
 
@@ -108,8 +109,28 @@ The Nexer mod adds up agent time per task, and a task is a branch of a working c
 | Warm, 4 minutes left, `ttl` `5m` | `◷ cache 4m left (5m)` | green |
 | Warm, 51 minutes 30 seconds left, `ttl` `1h` | `◷ cache 52m left (1h)` | green |
 | Warm, 50 seconds left, `ttl` `5m` | `◷ cache 1m left (5m)` | yellow |
+| Warm, last response 10 minutes ago, idle renewal seen, `ttl` `5m` | `◷ cache ~55m left (5m)` | green |
+| Warm, last response 2 minutes ago, no renewal seen, `ttl` `5m` | `◷ cache 3m left (5m)` | green |
 
 The time left is rounded up to whole minutes. A warm cache turns yellow when the exact time left is at most the warning window: 20% of the ttl, clamped to 60 to 300 seconds (`5m` gives 60 seconds, `1h` gives 300), or 60 seconds when the ttl is unknown. Colors are ANSI codes (`32` green, `33` yellow, `90` gray) and each line ends with a reset; when `NO_COLOR` is set and not empty ([no-color.org](https://no-color.org)) the same text is printed without them. Output is UTF-8 without a BOM. The ttl is shown only when it is one to three digits and `s`, `m` or `h`, so no other input text reaches the terminal. The command always exits 0. Claude Code re-runs it when a warm cache reaches `expires_at`; `install` will set `refreshInterval` for the countdown in between.
+
+### Estimate after an idle renewal
+
+Observed on Claude Code 2.1.300 and not documented: while a session is open and idle, `prompt_cache.expires_at` moves forward every 30 seconds with `prompt_cache.requests` unchanged, for 60 minutes after the last response, and the cache goes cold one ttl later. A plain countdown would read about 5 minutes for an hour. So the command remembers, per session (`CacheSession`, `src/NexerAI.Core/StatusLine`):
+
+- the request count (zero before the first response, so the first response is a change), and the time of the last response: `expires_at` minus the ttl at the first reading after the count changed. When the command first sees a session after a response (first run after an install or update, or a deleted file), that reading may already be a renewal, so the last response stays unknown and the countdown exact until the next response;
+- whether a renewal was seen: the same count with `expires_at` more than 5 seconds past the last response plus the ttl.
+
+Estimate, then correct. With a known last response, and until 60 minutes after it, the line shows an estimate marked with `~`, counting to the last response plus 60 minutes plus the ttl, never less than the exact time left; it takes the same colors. The estimate shows right after the response: the cache is then warm for at least one ttl anyway, so a wrong estimate in the first 75 seconds cannot mislead. When more than 75 seconds have passed since the response and no renewal was seen, Claude Code has stopped renewing (they come every 30 seconds), so the line shows the exact countdown, and the estimate comes back if a renewal shows up later. With an unknown last response, after the 60 minutes, and for a cold or unknown cache, the line is exact as before.
+
+### Session state and cleanup
+
+`FileSessionCacheStore` (`src/NexerAI.Adapters/StatusLine`) keeps the memory in `%USERPROFILE%\.nexer-ai\statusline\<session_id>.json`, for example `{"requests":3,"lastResponseAt":1791997772,"renewalSeen":true}`. The `session_id` becomes a file name only when it is 1 to 128 ASCII letters, digits, `-` and `_`, and not a Windows device name (`CON`, `COM1`...); for any other id nothing is stored. The file is written only when the memory changes, through a temporary file moved over it. Every file error is ignored: the line still prints, with the exact countdown when the memory is missing.
+
+Two cleanups keep the folder small:
+
+- `nexer-ai statusline --session-end` reads the `SessionEnd` hook JSON on stdin, deletes that session's file, prints nothing and exits 0. `install` (M5) will register it as a `SessionEnd` command hook in user settings, next to the status line. `SessionEnd` runs when a session ends, with the reasons `clear`, `resume`, `logout`, `prompt_input_exit` and `other`, and its hooks share a 1.5 second budget ([hooks](https://code.claude.com/docs/en/hooks#sessionend)).
+- The docs do not say `SessionEnd` runs when the terminal is closed, so every status line run also deletes the `*.json` files directly in that folder last written more than 2 hours ago. It never enters subfolders or follows links. After 65 idle minutes the cache is cold anyway.
 
 ## Build and test
 
