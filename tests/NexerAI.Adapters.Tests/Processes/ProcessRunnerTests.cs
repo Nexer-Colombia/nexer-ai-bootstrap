@@ -55,10 +55,28 @@ public sealed class ProcessRunnerTests : IDisposable
         Assert.Equal(new ProcessResult(0, "plugin install a@m --scope local\r\n", string.Empty), result);
     }
 
+    [Fact]
+    public async Task RunAsync_passes_a_batch_file_argument_with_spaces_as_one_quoted_argument()
+    {
+        // A folder with a space, as in C:\Users\Ana Maria\AppData\Roaming\npm\claude.cmd, and arguments with spaces:
+        // the command line then holds more than two quotes, which cmd.exe /c must not strip.
+        var tool = Path.Combine(folder.Path, "Ana Maria", "tool.cmd");
+        Directory.CreateDirectory(Path.GetDirectoryName(tool)!);
+        File.WriteAllText(tool, "@for %%a in (%*) do @echo [%%~a]\r\n");
+
+        var result = await runner.RunAsync(
+            tool, ["--", "C:/Users/Ana Maria/nexer-ai.exe", "mcp-launch", "a  b "], folder.Path, TestContext.Current.CancellationToken);
+
+        Assert.Equal(new ProcessResult(0, "[--]\r\n[C:/Users/Ana Maria/nexer-ai.exe]\r\n[mcp-launch]\r\n[a  b ]\r\n", string.Empty), result);
+    }
+
     [Theory]
     [InlineData("tool.cmd", "a&echo injected")]
+    [InlineData("tool.cmd", "a b&echo injected")]
+    [InlineData("tool.cmd", "a b\" & echo injected & \"")]
     [InlineData("tool.cmd", "%PATH%")]
-    [InlineData("tool.cmd", "a b")]
+    [InlineData("tool.cmd", "a %PATH%")]
+    [InlineData("tool.cmd", "a\tb")]
     [InlineData("tool.bat", "x|y")]
     [InlineData("50%.cmd", "list")]
     public async Task RunAsync_refuses_a_batch_file_with_text_that_cmd_would_interpret(string file, string argument)
