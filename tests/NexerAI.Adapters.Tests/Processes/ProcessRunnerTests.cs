@@ -184,9 +184,26 @@ public sealed class ProcessRunnerTests : IDisposable
         using var cancel = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         cancel.CancelAfter(TimeSpan.FromMilliseconds(200));
 
-        // Not the temporary folder: a killed process can hold its working directory for a moment, failing the cleanup.
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            () => runner.RunAsync("cmd.exe", ["/c", "ping -n 30 127.0.0.1 >nul"], Environment.SystemDirectory, cancel.Token));
+            () => runner.RunAsync("cmd.exe", ["/c", "ping -n 30 127.0.0.1 >nul"], folder.Path, cancel.Token));
+    }
+
+    [Fact]
+    public async Task RunAsync_releases_the_working_directory_before_it_throws_the_cancellation()
+    {
+        // cmd.exe and its child ping.exe both run in the folder; the marker says they started, so the cancellation
+        // reaches a running tree. A caller may delete the folder as soon as the cancellation surfaces.
+        var workingDirectory = Path.Combine(folder.Path, "repo");
+        Directory.CreateDirectory(workingDirectory);
+        var started = Path.Combine(workingDirectory, "started");
+        using var cancel = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+
+        var run = runner.RunAsync("cmd.exe", ["/c", "type nul> started& ping -n 30 127.0.0.1 >nul"], workingDirectory, cancel.Token);
+        await WaitUntilAsync(() => File.Exists(started));
+        await cancel.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => run);
+        Directory.Delete(workingDirectory, recursive: true);
     }
 
     [Fact]
@@ -197,7 +214,7 @@ public sealed class ProcessRunnerTests : IDisposable
 
         // The program may or may not have exited when the runner kills it; either way the cancellation surfaces.
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            () => runner.RunAsync("cmd.exe", ["/c", "exit 0"], Environment.SystemDirectory, cancel.Token));
+            () => runner.RunAsync("cmd.exe", ["/c", "exit 0"], folder.Path, cancel.Token));
     }
 
     [Fact]
@@ -221,8 +238,19 @@ public sealed class ProcessRunnerTests : IDisposable
         var input = new string('x', 8_000_000); // Far more than a pipe holds.
 
         var run = runner.RunAsync(
-            "cmd.exe", ["/c", "ping -n 30 127.0.0.1 >nul"], Environment.SystemDirectory, cancel.Token, standardInput: input);
+            "cmd.exe", ["/c", "ping -n 30 127.0.0.1 >nul"], folder.Path, cancel.Token, standardInput: input);
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => run.WaitAsync(TimeSpan.FromSeconds(15), TestContext.Current.CancellationToken));
+    }
+
+    /// <summary>Polls <paramref name="condition"/> until it holds; fails after ten seconds.</summary>
+    private static async Task WaitUntilAsync(Func<bool> condition)
+    {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        timeout.CancelAfter(TimeSpan.FromSeconds(10));
+        while (!condition())
+        {
+            await Task.Delay(10, timeout.Token);
+        }
     }
 }
