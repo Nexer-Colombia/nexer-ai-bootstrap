@@ -123,4 +123,14 @@ public sealed class ConsolePrompterSecretTests
         Assert.DoesNotContain("partial", ex.Message, StringComparison.Ordinal);
         Assert.Equal([true, false], broken.ControlCSettings);
     }
+
+    [Fact]
+    public void Characters_typed_with_altgr_are_kept()
+    {
+        // AltGr arrives as Control+Alt with the character in KeyChar: @ on a Spanish layout is AltGr+2.
+        const string AltGrCharacters = "@€[]{}\\|#~";
+        console.Type("a").TypeAltGr(AltGrCharacters).Type("z\r");
+
+        Assert.Equal("a" + AltGrCharacters + "z", Prompter.ReadSecret(Prompt));
+    }
 }
