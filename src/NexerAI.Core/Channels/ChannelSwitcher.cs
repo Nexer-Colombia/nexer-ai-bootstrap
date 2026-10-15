@@ -2,6 +2,7 @@ using NexerAI.Core.Domain;
 using NexerAI.Core.Planning;
 using NexerAI.Core.Ports;
 using NexerAI.Core.State;
+using NexerAI.Core.Tasks;
 
 namespace NexerAI.Core.Channels;
 
@@ -13,7 +14,11 @@ namespace NexerAI.Core.Channels;
 /// <remarks>
 /// Each step reads the agent's state first and acts only on what is left (<see cref="ChannelSwitchPlanner"/>), and the
 /// switch is recorded in the state file before the first change, so any later run finishes an interrupted switch
-/// instead of reverting it.
+/// instead of reverting it, even when it is asked for the other channel (it moves back afterwards). The one exception
+/// is a refused registration of the new marketplace (the same name registered from another source) when no plugin was
+/// touched yet: the record is cleared then, so the person is not stuck, can stay on the channel they have, and a rerun
+/// toward the same target starts again once the marketplace is fixed. The channel's auto-update is checked on every
+/// run, because installs and <c>marketplace add</c> can drop it.
 /// </remarks>
 public static class ChannelSwitcher
 {
@@ -29,7 +34,10 @@ public static class ChannelSwitcher
     /// <param name="stateStore">The state file.</param>
     /// <param name="target">The channel the person wants.</param>
     /// <returns>Whether any plugin or marketplace may have changed, so the person must restart or reload.</returns>
-    /// <exception cref="AgentStateException">A step failed; the switch stays recorded and the next run finishes it.</exception>
+    /// <exception cref="AgentStateException">
+    /// A step failed; the switch stays recorded and the next run finishes it, except for a refused registration before
+    /// any plugin was touched, which leaves nothing recorded.
+    /// </exception>
     public static async Task<bool> SwitchAsync(IAgentInstaller installer, IStateStore stateStore, Channel target, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(installer);
@@ -38,8 +46,19 @@ public static class ChannelSwitcher
 
         var resumed = await ResumeAsync(installer, stateStore, ct).ConfigureAwait(false);
         var state = await stateStore.ReadAsync(ct).ConfigureAwait(false);
-        if (state.Channel is not { } from || from == target)
+        if (state.Channel is not { } from)
         {
+            return resumed;
+        }
+
+        if (from == target)
+        {
+            if (resumed)
+            {
+                return true; // The finished switch just checked it.
+            }
+
+            await ChannelRegistration.EnsureAsync(installer, target, ct).ConfigureAwait(false);
             return resumed;
         }
 
@@ -57,7 +76,7 @@ public static class ChannelSwitcher
     /// reverts a switch.
     /// </summary>
     /// <returns>Whether a switch was pending and is now finished.</returns>
-    /// <exception cref="AgentStateException">A step failed; the switch stays recorded.</exception>
+    /// <exception cref="AgentStateException">A step failed; the switch stays recorded, except for a refused registration before any plugin was touched.</exception>
     public static async Task<bool> ResumeAsync(IAgentInstaller installer, IStateStore stateStore, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(installer);
@@ -76,7 +95,21 @@ public static class ChannelSwitcher
     /// <summary>Steps 2 to 5: register the new marketplace, move the plugins, remove the old marketplace, clear the switch.</summary>
     private static async Task FinishAsync(IAgentInstaller installer, IStateStore stateStore, ChannelSwitch pending, CancellationToken ct)
     {
-        await ChannelRegistration.EnsureAsync(installer, pending.To, ct).ConfigureAwait(false);
+        try
+        {
+            await ChannelRegistration.EnsureAsync(installer, pending.To, ct).ConfigureAwait(false);
+        }
+        catch (AgentStateException)
+        {
+            // Nothing changed, and the pending switch would make every later run, even one that stays on the current
+            // channel, fail with the same refusal: drop it. A rerun toward the same target records it again.
+            if (await RegistrationRefusedBeforeAnyMoveAsync(installer, pending, ct).ConfigureAwait(false))
+            {
+                await stateStore.UpdateAsync(current => current with { Switch = null }, ct).ConfigureAwait(false);
+            }
+
+            throw;
+        }
 
         // Step 3: user scope first, then the local scope of each folder, each read from its own folder.
         await MoveAsync(installer, pending, PluginScope.User, null, ct).ConfigureAwait(false);
@@ -92,8 +125,46 @@ public static class ChannelSwitcher
             await installer.RemoveMarketplaceAsync(pending.From.Name, ct).ConfigureAwait(false);
         }
 
+        // The installs and the removal can drop the auto-update of the new marketplace (design 4.1): check it again.
+        await ChannelRegistration.EnsureAsync(installer, pending.To, ct).ConfigureAwait(false);
+
         // Step 5.
         await stateStore.UpdateAsync(current => current with { Channel = pending.To, Switch = null }, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Whether the new marketplace's name is registered from another source (the refusal of <see cref="ChannelRegistration"/>)
+    /// and every <see cref="ChannelSwitch.From"/> plugin is still as the person had it: enabled unless recorded as
+    /// disabled by the person, so no step of the move ran.
+    /// </summary>
+    private static async Task<bool> RegistrationRefusedBeforeAnyMoveAsync(IAgentInstaller installer, ChannelSwitch pending, CancellationToken ct)
+    {
+        var marketplaces = await installer.GetMarketplacesAsync(ct).ConfigureAwait(false);
+        var registered = marketplaces.FirstOrDefault(m => string.Equals(m.Name, pending.To.Name, StringComparison.Ordinal));
+        if (registered is null || registered.IsRegistrationOf(pending.To))
+        {
+            return false;
+        }
+
+        var places = new List<(IAgentInstaller Agent, PluginScope Scope, string? Folder)> { (installer, PluginScope.User, null) };
+        foreach (var folder in await installer.GetPluginFoldersAsync(ct).ConfigureAwait(false))
+        {
+            places.Add((installer.ForFolder(folder), PluginScope.Local, folder));
+        }
+
+        foreach (var (agent, scope, folder) in places)
+        {
+            foreach (var plugin in await agent.GetInstalledPluginsAsync(ct).ConfigureAwait(false))
+            {
+                if (plugin.Scope == scope && plugin.Marketplace == pending.From.Name
+                    && plugin.Enabled == pending.PersonDisabled.Any(l => l.Name == plugin.Name && l.Scope == scope && (scope == PluginScope.User || WindowsPath.SameFolder(l.Folder!, folder!))))
+                {
+                    return false;
+                }
+            }
+        }
+
+        return true;
     }
 
     private static async Task MoveAsync(IAgentInstaller agent, ChannelSwitch pending, PluginScope scope, string? folder, CancellationToken ct)

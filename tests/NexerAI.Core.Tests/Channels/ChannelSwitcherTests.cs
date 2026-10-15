@@ -50,6 +50,7 @@ public sealed class ChannelSwitcherTests
                 $"install nexer-dev-umbraco@nexer-early --scope local in {FolderA}",
                 $"uninstall nexer-dev-umbraco@nexer --scope local in {FolderA}",
                 "marketplace remove nexer",
+                "marketplace autoUpdate nexer-early",
             ],
             agent.Calls);
         Assert.Equal([User("nexer-core", "nexer-early"), User("nexer-qa", "nexer-early")], agent.Installed);
@@ -128,22 +129,84 @@ public sealed class ChannelSwitcherTests
 
         await ChannelSwitcher.SwitchAsync(agent, store, Channel.Early, Ct);
 
-        Assert.Equal(["marketplace autoUpdate nexer-early", "marketplace remove nexer"], agent.Calls);
+        Assert.Equal(["marketplace autoUpdate nexer-early", "marketplace remove nexer", "marketplace autoUpdate nexer-early"], agent.Calls);
         Assert.Null(store.State.Switch);
     }
 
     [Fact]
-    public async Task A_rerun_after_the_switch_completed_does_nothing()
+    public async Task A_rerun_after_the_switch_completed_only_checks_the_auto_update_of_the_channel()
     {
         await ChannelSwitcher.SwitchAsync(agent, store, Channel.Early, Ct);
         agent.Calls.Clear();
         var updates = store.UpdateCount;
 
+        // Installs and "marketplace add" can drop the setting, so every run checks it again (design 4.1).
         Assert.False(await ChannelSwitcher.SwitchAsync(agent, store, Channel.Early, Ct));
         Assert.False(await ChannelSwitcher.ResumeAsync(agent, store, Ct));
 
-        Assert.Empty(agent.Calls);
+        Assert.Equal(["marketplace autoUpdate nexer-early"], agent.Calls);
         Assert.Equal(updates, store.UpdateCount);
+    }
+
+    [Fact]
+    public async Task The_auto_update_is_checked_last_because_a_plugin_install_can_drop_it()
+    {
+        await ChannelSwitcher.SwitchAsync(agent, store, Channel.Early, Ct);
+
+        Assert.Equal(
+            ["marketplace autoUpdate nexer-early", "marketplace remove nexer", "marketplace autoUpdate nexer-early"],
+            agent.Calls.Where(c => c.StartsWith("marketplace autoUpdate", StringComparison.Ordinal) || c == "marketplace remove nexer").ToList());
+        Assert.Equal("marketplace autoUpdate nexer-early", agent.Calls[^1]);
+    }
+
+    [Fact]
+    public async Task A_refused_registration_that_changed_nothing_leaves_no_pending_switch_so_the_person_can_stay_or_retry()
+    {
+        var foreign = new RegisteredMarketplace("nexer-early", "github", "someone/else", null);
+        agent.Marketplaces.Add(foreign);
+
+        await Assert.ThrowsAsync<AgentStateException>(() => ChannelSwitcher.SwitchAsync(agent, store, Channel.Early, Ct));
+
+        Assert.Null(store.State.Switch);
+        Assert.Same(Channel.Stable, store.State.Channel);
+        Assert.Empty(agent.Calls);
+
+        // Staying on the original channel is not blocked by the refusal.
+        Assert.False(await ChannelSwitcher.SwitchAsync(agent, store, Channel.Stable, Ct));
+        Assert.False(await ChannelSwitcher.ResumeAsync(agent, store, Ct));
+
+        // Once the person removed the foreign marketplace, the same request goes through.
+        agent.Marketplaces.Remove(foreign);
+        Assert.True(await ChannelSwitcher.SwitchAsync(agent, store, Channel.Early, Ct));
+        Assert.Equal((Channel.Early, (ChannelSwitch?)null), (store.State.Channel, store.State.Switch));
+        Assert.Equal([User("nexer-core", "nexer-early"), User("nexer-qa", "nexer-early")], agent.Installed);
+    }
+
+    [Fact]
+    public async Task A_refusal_after_plugins_were_moved_keeps_the_pending_switch_so_a_rerun_finishes_it()
+    {
+        agent.FailOnce = "install nexer-qa@nexer-early";
+        await Assert.ThrowsAsync<AgentStateException>(() => ChannelSwitcher.SwitchAsync(agent, store, Channel.Early, Ct));
+        var early = agent.Marketplaces.Single(m => m.Name == "nexer-early");
+        agent.Marketplaces[agent.Marketplaces.IndexOf(early)] = early with { Repository = "someone/else" };
+
+        await Assert.ThrowsAsync<AgentStateException>(() => ChannelSwitcher.ResumeAsync(agent, store, Ct));
+
+        Assert.NotNull(store.State.Switch);
+    }
+
+    [Fact]
+    public async Task SwitchAsync_back_to_the_old_channel_after_an_interruption_in_the_middle_of_the_move_ends_on_the_old_channel()
+    {
+        agent.Installed[1] = User("nexer-qa", "nexer", enabled: false);
+        agent.FailOnce = "install nexer-qa@nexer-early";
+        await Assert.ThrowsAsync<AgentStateException>(() => ChannelSwitcher.SwitchAsync(agent, store, Channel.Early, Ct));
+
+        Assert.True(await ChannelSwitcher.SwitchAsync(agent, store, Channel.Stable, Ct));
+
+        Assert.Equal([User("nexer-core", "nexer"), User("nexer-qa", "nexer", enabled: false)], agent.Installed);
+        Assert.Equal(["nexer"], agent.Marketplaces.Select(m => m.Name));
+        Assert.Equal((Channel.Stable, (ChannelSwitch?)null), (store.State.Channel, store.State.Switch));
     }
 
     [Fact]
