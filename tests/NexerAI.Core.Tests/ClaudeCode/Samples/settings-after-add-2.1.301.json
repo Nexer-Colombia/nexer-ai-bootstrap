@@ -1,0 +1,17 @@
+{
+  "enabledPlugins": {},
+  "extraKnownMarketplaces": {
+    "nexer": {
+      "source": {
+        "source": "github",
+        "repo": "Nexer-Colombia/nexer-ai-marketplace"
+      }
+    },
+    "nexer-early": {
+      "source": {
+        "source": "github",
+        "repo": "Nexer-Colombia/nexer-ai-marketplace-early"
+      }
+    }
+  }
+}
