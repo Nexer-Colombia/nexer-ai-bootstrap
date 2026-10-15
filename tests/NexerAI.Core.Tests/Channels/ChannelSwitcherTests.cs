@@ -195,6 +195,47 @@ public sealed class ChannelSwitcherTests
         Assert.NotNull(store.State.Switch);
     }
 
+    private void PendingSwitchRefusedBeforeAnyMove()
+    {
+        agent.Marketplaces.Add(new RegisteredMarketplace("nexer-early", "github", "someone/else", null));
+        store.State = store.State with { Switch = new ChannelSwitch(Channel.Stable, Channel.Early, []) };
+    }
+
+    [Fact]
+    public async Task A_request_for_the_current_channel_succeeds_when_the_pending_switch_away_from_it_is_dropped_as_refused()
+    {
+        PendingSwitchRefusedBeforeAnyMove();
+
+        Assert.False(await ChannelSwitcher.SwitchAsync(agent, store, Channel.Stable, Ct));
+
+        Assert.Null(store.State.Switch);
+        Assert.Same(Channel.Stable, store.State.Channel);
+        Assert.Equal([User("nexer-core", "nexer"), User("nexer-qa", "nexer")], agent.Installed);
+    }
+
+    [Fact]
+    public async Task A_request_for_the_refused_channel_still_reports_the_refusal_and_drops_the_pending_switch()
+    {
+        PendingSwitchRefusedBeforeAnyMove();
+
+        await Assert.ThrowsAsync<AgentStateException>(() => ChannelSwitcher.SwitchAsync(agent, store, Channel.Early, Ct));
+
+        Assert.Null(store.State.Switch);
+        Assert.Same(Channel.Stable, store.State.Channel);
+    }
+
+    [Fact]
+    public async Task A_refused_pending_switch_with_a_moved_plugin_still_reports_the_refusal_and_stays_pending_even_for_the_current_channel()
+    {
+        agent.Installed[0] = User("nexer-core", "nexer", enabled: false);
+        agent.Installed.Add(User("nexer-core", "nexer-early"));
+        PendingSwitchRefusedBeforeAnyMove();
+
+        await Assert.ThrowsAsync<AgentStateException>(() => ChannelSwitcher.SwitchAsync(agent, store, Channel.Stable, Ct));
+
+        Assert.NotNull(store.State.Switch);
+    }
+
     [Fact]
     public async Task SwitchAsync_back_to_the_old_channel_after_an_interruption_in_the_middle_of_the_move_ends_on_the_old_channel()
     {

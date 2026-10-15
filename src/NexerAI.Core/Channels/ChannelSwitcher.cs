@@ -44,7 +44,25 @@ public static class ChannelSwitcher
         ArgumentNullException.ThrowIfNull(stateStore);
         ArgumentNullException.ThrowIfNull(target);
 
-        var resumed = await ResumeAsync(installer, stateStore, ct).ConfigureAwait(false);
+        var pendingBefore = (await stateStore.ReadAsync(ct).ConfigureAwait(false)).Switch;
+        bool resumed;
+        try
+        {
+            resumed = await ResumeAsync(installer, stateStore, ct).ConfigureAwait(false);
+        }
+        catch (AgentStateException) when (pendingBefore is not null && pendingBefore.From == target && pendingBefore.To != target)
+        {
+            if ((await stateStore.ReadAsync(ct).ConfigureAwait(false)).Switch is not null)
+            {
+                throw; // Kept for a rerun: something moved, or the failure was not the refusal.
+            }
+
+            // The pending switch was refused before anything moved and is dropped; the person only asked for the
+            // channel they are on, so there is nothing to report: keep its registration and auto-update right.
+            await ChannelRegistration.EnsureAsync(installer, target, ct).ConfigureAwait(false);
+            return false;
+        }
+
         var state = await stateStore.ReadAsync(ct).ConfigureAwait(false);
         if (state.Channel is not { } from)
         {
