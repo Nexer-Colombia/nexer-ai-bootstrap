@@ -15,6 +15,15 @@ public sealed class ChannelTests
         Assert.Equal(expectedRef, channel.GitRef);
     }
 
+    [Theory]
+    [InlineData("nexer", "Nexer-Colombia/nexer-ai-marketplace")]
+    [InlineData("nexer-early", "Nexer-Colombia/nexer-ai-marketplace-early")]
+    public void Each_channel_names_its_marketplace_repository_with_the_exact_owner_casing(string name, string repository)
+    {
+        // strictKnownMarketplaces matches the owner case-sensitively (design 4.1), so the spelling is exact.
+        Assert.Equal(repository, Channel.Parse(name).Repository);
+    }
+
     [Fact]
     public void Parse_returns_the_shared_instances()
     {

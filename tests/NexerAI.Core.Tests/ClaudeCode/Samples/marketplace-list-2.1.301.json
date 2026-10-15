@@ -1,0 +1,14 @@
+[
+  {
+    "name": "nexer",
+    "source": "github",
+    "repo": "Nexer-Colombia/nexer-ai-marketplace",
+    "installLocation": "C:\\t\\cr\\plugins\\marketplaces\\nexer"
+  },
+  {
+    "name": "nexer-early",
+    "source": "github",
+    "repo": "Nexer-Colombia/nexer-ai-marketplace-early",
+    "installLocation": "C:\\t\\cr\\plugins\\marketplaces\\nexer-early"
+  }
+]
