@@ -7,11 +7,18 @@ namespace NexerAI.Adapters.Processes;
 public interface IProcessRunner
 {
     /// <summary>Starts <paramref name="fileName"/> in <paramref name="workingDirectory"/>, waits for it to exit and returns what it wrote.</summary>
-    /// <param name="fileName">The program, found on <c>PATH</c> like <c>CreateProcess</c> does (an <c>.exe</c>, not a <c>.cmd</c>).</param>
+    /// <param name="fileName">
+    /// The program: a full path, or a bare name found like <c>CreateProcess</c> does (an <c>.exe</c> only). A batch
+    /// file (<c>.cmd</c>, <c>.bat</c>) must be a full path.
+    /// </param>
     /// <param name="arguments">Each argument as one item, quoted by the runner.</param>
     /// <param name="workingDirectory">An absolute folder.</param>
     /// <param name="ct">Cancels the wait and kills the process tree.</param>
-    /// <exception cref="System.ComponentModel.Win32Exception">The program cannot be started, for example because it is not on <c>PATH</c>.</exception>
+    /// <exception cref="System.ComponentModel.Win32Exception">
+    /// The program cannot be started; <see cref="System.ComponentModel.Win32Exception.NativeErrorCode"/> tells why,
+    /// for example <see cref="ProcessRunner.ErrorFileNotFound"/> or <see cref="ProcessRunner.ErrorDirectory"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException">A batch file whose path or arguments <c>cmd.exe</c> would interpret.</exception>
     Task<ProcessResult> RunAsync(string fileName, IReadOnlyList<string> arguments, string workingDirectory, CancellationToken ct);
 }
 

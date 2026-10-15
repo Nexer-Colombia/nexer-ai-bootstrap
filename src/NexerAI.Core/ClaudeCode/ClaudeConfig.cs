@@ -43,8 +43,9 @@ public static class ClaudeConfig
     /// <summary>
     /// Returns the MCP servers in the text of the file: user scope from the top-level <c>mcpServers</c> (observed, not
     /// documented), then local scope from <c>projects[key].mcpServers</c> of each key naming <paramref name="projectFolder"/>
-    /// (documented in the scopes table of https://code.claude.com/docs/en/mcp), in document order. Only names and
-    /// scopes are kept: <c>env</c> and <c>headers</c> can hold secrets.
+    /// (documented in the scopes table of https://code.claude.com/docs/en/mcp), in document order. A server named in
+    /// several keys that differ only by case or separators is returned once. Only names and scopes are kept:
+    /// <c>env</c> and <c>headers</c> can hold secrets.
     /// </summary>
     /// <param name="json">The text of the file.</param>
     /// <param name="projectFolder">From <see cref="ProjectFolder"/>; keys are compared ignoring case and separators.</param>
@@ -82,7 +83,7 @@ public static class ClaudeConfig
         catch (JsonException ex)
         {
             // The exception message can quote part of the text, so only the line is passed on.
-            throw Unrecognized($"is not valid JSON (line {ex.LineNumber + 1})");
+            throw Unrecognized($"is not valid JSON{JsonErrors.Where(ex)}");
         }
     }
 
@@ -132,7 +133,10 @@ public static class ClaudeConfig
                 throw Unrecognized($"has an MCP server '{server.Name}' with neither a command nor a url");
             }
 
-            servers.Add(new InstalledMcpServer(server.Name, scope));
+            if (!servers.Contains(new InstalledMcpServer(server.Name, scope)))
+            {
+                servers.Add(new InstalledMcpServer(server.Name, scope));
+            }
         }
     }
 

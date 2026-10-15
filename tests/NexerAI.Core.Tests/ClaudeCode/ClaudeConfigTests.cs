@@ -43,6 +43,20 @@ public sealed class ClaudeConfigTests
         Assert.Equal([UserEcho], ClaudeConfig.ReadMcpServers(Sample("claude-json-2.1.300.json"), projectFolder));
     }
 
+    [Fact]
+    public void ReadMcpServers_reads_a_server_once_when_several_keys_name_the_project()
+    {
+        var json = """
+            { "projects": {
+                "C:/t/ap": { "mcpServers": { "jira": { "command": "a" } } },
+                "c:\\T\\AP\\": { "mcpServers": { "jira": { "command": "b" }, "ado": { "command": "c" } } } } }
+            """;
+
+        Assert.Equal(
+            [new InstalledMcpServer("jira", PluginScope.Local), new InstalledMcpServer("ado", PluginScope.Local)],
+            ClaudeConfig.ReadMcpServers(json, "C:/t/ap"));
+    }
+
     [Theory]
     [InlineData("{}")]
     [InlineData("""{"mcpServers": null, "projects": null}""")]
@@ -71,6 +85,14 @@ public sealed class ClaudeConfigTests
         var error = Assert.Throws<AgentStateException>(() => ClaudeConfig.ReadMcpServers(json, "C:/t/ap"));
 
         Assert.Contains(".claude.json", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ReadMcpServers_names_the_line_of_invalid_JSON()
+    {
+        var error = Assert.Throws<AgentStateException>(() => ClaudeConfig.ReadMcpServers("{\n  \"projects\": x", "C:/t/ap"));
+
+        Assert.Contains("is not valid JSON (line 2);", error.Message, StringComparison.Ordinal);
     }
 
     [Theory]

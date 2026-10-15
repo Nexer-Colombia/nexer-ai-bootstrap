@@ -58,6 +58,18 @@ public sealed class ClaudePluginListTests
         Assert.Empty(ClaudePluginList.Parse($"[{entry}]", @"C:\t\ap"));
     }
 
+    [Theory]
+    [InlineData("""{"scope": "managed"}""")]
+    [InlineData("""{"id": 7, "scope": "project", "enabled": "yes"}""")]
+    [InlineData("""{"id": "a@m", "scope": "session"}""")]
+    [InlineData("""{"version": "1", "scope": "local", "projectPath": "C:/t/bp", "enabled": true}""")]
+    public void Parse_skips_an_incomplete_entry_at_a_scope_or_folder_it_does_not_use(string entry)
+    {
+        var plugins = ClaudePluginList.Parse($$"""[{{entry}}, {"id": "a@m", "version": "1", "scope": "user", "enabled": true}]""", @"C:\t\ap");
+
+        Assert.Equal([new InstalledPlugin("a", "m", "1", PluginScope.User, Enabled: true)], plugins);
+    }
+
     [Fact]
     public void Parse_reads_an_empty_list()
     {
@@ -75,6 +87,8 @@ public sealed class ClaudePluginListTests
     [InlineData("""[{"id": "a@m", "version": "1", "scope": "user"}]""")]
     [InlineData("""[{"id": "a@m", "version": "1", "scope": "user", "enabled": "true"}]""")]
     [InlineData("""[{"id": 7, "version": "1", "scope": "user", "enabled": true}]""")]
+    [InlineData("""[{"id": "a@m", "version": "1", "enabled": true, "scope": 1}]""")]
+    [InlineData("""[{"id": "a@m", "scope": "local", "projectPath": "C:/t/ap", "enabled": true}]""")]
     public void Parse_rejects_output_it_does_not_recognize_with_a_typed_error(string json)
     {
         var error = Assert.Throws<AgentStateException>(() => ClaudePluginList.Parse(json, @"C:\t\ap"));

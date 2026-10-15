@@ -34,4 +34,63 @@ public sealed class ProcessRunnerTests : IDisposable
         await Assert.ThrowsAsync<Win32Exception>(
             () => runner.RunAsync("nexer-ai-no-such-program", [], folder.Path, TestContext.Current.CancellationToken));
     }
+
+    [Fact]
+    public async Task RunAsync_reports_a_missing_working_directory_with_its_own_error_code()
+    {
+        var error = await Assert.ThrowsAsync<Win32Exception>(
+            () => runner.RunAsync("cmd.exe", ["/c", "exit 0"], Path.Combine(folder.Path, "gone"), TestContext.Current.CancellationToken));
+
+        Assert.Equal(ProcessRunner.ErrorDirectory, error.NativeErrorCode);
+    }
+
+    [Fact]
+    public async Task RunAsync_runs_a_cmd_file_given_by_its_full_path()
+    {
+        File.WriteAllText(Path.Combine(folder.Path, "tool.cmd"), "@echo %*\r\n");
+
+        var result = await runner.RunAsync(
+            Path.Combine(folder.Path, "tool.cmd"), ["plugin", "install", "a@m", "--scope", "local"], folder.Path, TestContext.Current.CancellationToken);
+
+        Assert.Equal(new ProcessResult(0, "plugin install a@m --scope local\r\n", string.Empty), result);
+    }
+
+    [Theory]
+    [InlineData("tool.cmd", "a&echo injected")]
+    [InlineData("tool.cmd", "%PATH%")]
+    [InlineData("tool.cmd", "a b")]
+    [InlineData("tool.bat", "x|y")]
+    [InlineData("50%.cmd", "list")]
+    public async Task RunAsync_refuses_a_batch_file_with_text_that_cmd_would_interpret(string file, string argument)
+    {
+        var path = Path.Combine(folder.Path, file);
+        File.WriteAllText(path, $"@echo ran> \"{Path.Combine(folder.Path, "ran.txt")}\"\r\n");
+
+        await Assert.ThrowsAsync<ArgumentException>(
+            () => runner.RunAsync(path, [argument], folder.Path, TestContext.Current.CancellationToken));
+
+        Assert.False(File.Exists(Path.Combine(folder.Path, "ran.txt")));
+    }
+
+    [Fact]
+    public async Task RunAsync_kills_the_program_and_throws_when_cancelled()
+    {
+        using var cancel = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        cancel.CancelAfter(TimeSpan.FromMilliseconds(200));
+
+        // Not the temporary folder: a killed process can hold its working directory for a moment, failing the cleanup.
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => runner.RunAsync("cmd.exe", ["/c", "ping -n 30 127.0.0.1 >nul"], Environment.SystemDirectory, cancel.Token));
+    }
+
+    [Fact]
+    public async Task RunAsync_throws_the_cancellation_even_when_the_program_has_already_exited()
+    {
+        using var cancel = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        await cancel.CancelAsync();
+
+        // The program may or may not have exited when the runner kills it; either way the cancellation surfaces.
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => runner.RunAsync("cmd.exe", ["/c", "exit 0"], Environment.SystemDirectory, cancel.Token));
+    }
 }

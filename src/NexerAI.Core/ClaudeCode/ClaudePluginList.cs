@@ -24,8 +24,9 @@ public static class ClaudePluginList
     /// <param name="json">The standard output of the command.</param>
     /// <param name="workingDirectory">The absolute folder the command ran in; compared ignoring case and separators.</param>
     /// <exception cref="AgentStateException">
-    /// The output is not valid JSON, not an array, or has an entry without a string <c>id</c>, <c>version</c> and
-    /// <c>scope</c> and a boolean <c>enabled</c>.
+    /// The output is not valid JSON, not an array, or has an entry without a string <c>scope</c>, or an entry that
+    /// is kept without a string <c>id</c> and <c>version</c> and a boolean <c>enabled</c>. Skipped entries are not
+    /// checked further, so an odd entry the bootstrap does not manage never blocks the others.
     /// </exception>
     public static IReadOnlyList<InstalledPlugin> Parse(string json, string workingDirectory)
     {
@@ -54,29 +55,34 @@ public static class ClaudePluginList
         catch (JsonException ex)
         {
             // The exception message can quote part of the text, so only the line is passed on.
-            throw Unrecognized($"is not valid JSON (line {ex.LineNumber + 1})");
+            throw Unrecognized($"is not valid JSON{JsonErrors.Where(ex)}");
         }
     }
 
     private static InstalledPlugin? Read(JsonElement entry, string workingDirectory)
     {
-        if (Text(entry, "id") is not { } id
-            || Text(entry, "version") is not { } version
-            || Text(entry, "scope") is not { } scope
-            || Property(entry, "enabled") is not { ValueKind: JsonValueKind.True or JsonValueKind.False } enabled)
+        PluginScope? pluginScope = Text(entry, "scope") switch
         {
-            throw Unrecognized("has an entry without a string id, version and scope and a boolean enabled");
-        }
-
-        PluginScope? pluginScope = scope switch
-        {
+            null => throw Unrecognized("has an entry without a string scope"),
             "user" => PluginScope.User,
             "local" when Text(entry, "projectPath") is { } path && WindowsPath.SameFolder(path, workingDirectory) => PluginScope.Local,
             _ => null,
         };
+        if (pluginScope is not { } scope)
+        {
+            return null;
+        }
+
+        if (Text(entry, "id") is not { } id
+            || Text(entry, "version") is not { } version
+            || Property(entry, "enabled") is not { ValueKind: JsonValueKind.True or JsonValueKind.False } enabled)
+        {
+            throw Unrecognized("has an entry without a string id and version and a boolean enabled");
+        }
+
         var at = id.LastIndexOf('@');
-        return pluginScope is { } s && at > 0 && at < id.Length - 1
-            ? new InstalledPlugin(id[..at], id[(at + 1)..], version, s, enabled.GetBoolean())
+        return at > 0 && at < id.Length - 1
+            ? new InstalledPlugin(id[..at], id[(at + 1)..], version, scope, enabled.GetBoolean())
             : null;
     }
 
