@@ -90,6 +90,94 @@ public sealed class ProcessRunnerTests : IDisposable
         Assert.False(File.Exists(Path.Combine(folder.Path, "ran.txt")));
     }
 
+    [Theory]
+    [InlineData("\"")]
+    [InlineData("!")]
+    [InlineData("^")]
+    [InlineData("<")]
+    [InlineData(">")]
+    [InlineData("a b !c")]
+    [InlineData("a \"b\" c")]
+    [InlineData("\uFF02")] // Fullwidth quotation mark: a best-fit codepage can map it to a quote.
+    [InlineData("\uFF05")] // Fullwidth percent sign.
+    [InlineData("\uFF3E")] // Fullwidth circumflex accent.
+    [InlineData("\u01C3")] // Latin letter retroflex click: best-fit maps it to "!".
+    [InlineData("\u02BA")] // Modifier letter double prime: best-fit maps it to a quote.
+    [InlineData("\u02EE")] // Modifier letter double apostrophe.
+    [InlineData("\u02C6")] // Modifier letter circumflex accent: best-fit maps it to "^".
+    [InlineData("\u00D7")] // Multiplication sign: inside the Latin-1 letter block but not a letter.
+    [InlineData("\u00F7")] // Division sign.
+    public async Task RunAsync_refuses_a_batch_file_argument_with_a_character_cmd_or_a_codepage_could_turn_into_syntax(string argument)
+    {
+        var path = Path.Combine(folder.Path, "tool.cmd");
+        File.WriteAllText(path, "@exit /b 0\r\n");
+
+        await Assert.ThrowsAsync<ArgumentException>(
+            () => runner.RunAsync(path, [argument], folder.Path, TestContext.Current.CancellationToken));
+    }
+
+    [Theory]
+    [InlineData("C:/Users/Mar\u00EDa/nexer-ai.exe")]
+    [InlineData("Mu\u00F1oz")]
+    [InlineData("Zo\u00EB")]
+    [InlineData("\u00C7elik")]
+    [InlineData("\u00D1u\u00F1ez")]
+    [InlineData("Mar\u00EDa Jos\u00E9")]
+    public async Task RunAsync_accepts_letters_and_digits_beyond_ASCII_in_a_batch_file_argument(string argument)
+    {
+        var path = Path.Combine(folder.Path, "tool.cmd");
+        File.WriteAllText(path, "@exit /b 0\r\n");
+
+        var result = await runner.RunAsync(path, [argument], folder.Path, TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
+    [InlineData("a&b")]
+    [InlineData("a|b")]
+    [InlineData("a<b")]
+    [InlineData("a>b")]
+    [InlineData("a^b")]
+    [InlineData("a%b")]
+    [InlineData("a!b")]
+    [InlineData("a\"b")]
+    public async Task RunAsync_refuses_a_batch_file_path_with_a_character_cmd_would_interpret(string folderName)
+    {
+        // Nothing is created: the refusal comes before the file is touched, and some of these are not valid file names.
+        var path = Path.Combine(folder.Path, folderName, "tool.cmd");
+
+        await Assert.ThrowsAsync<ArgumentException>(
+            () => runner.RunAsync(path, ["list"], folder.Path, TestContext.Current.CancellationToken));
+    }
+
+    [Theory]
+    [InlineData(@"\\server\share\repo")]
+    [InlineData("//server/share/repo")]
+    [InlineData(@"\/server\share\repo")]
+    [InlineData(@"/\server\share\repo")]
+    public async Task RunAsync_refuses_a_UNC_working_directory_for_a_batch_file(string workingDirectory)
+    {
+        // cmd.exe does not start in a UNC folder: it runs in the Windows folder instead, so a local-scope command
+        // would act on the wrong folder.
+        var path = Path.Combine(folder.Path, "tool.cmd");
+        File.WriteAllText(path, "@exit /b 0\r\n");
+
+        var error = await Assert.ThrowsAsync<ArgumentException>(
+            () => runner.RunAsync(path, ["list"], workingDirectory, TestContext.Current.CancellationToken));
+
+        Assert.Contains("UNC", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task RunAsync_writes_the_standard_input_then_closes_it()
+    {
+        var result = await runner.RunAsync(
+            "findstr.exe", ["^"], folder.Path, TestContext.Current.CancellationToken, standardInput: "{\"k\":\"v\"}");
+
+        Assert.Equal(new ProcessResult(0, "{\"k\":\"v\"}\r\n", string.Empty), result);
+    }
+
     [Fact]
     public async Task RunAsync_kills_the_program_and_throws_when_cancelled()
     {
@@ -110,5 +198,31 @@ public sealed class ProcessRunnerTests : IDisposable
         // The program may or may not have exited when the runner kills it; either way the cancellation surfaces.
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
             () => runner.RunAsync("cmd.exe", ["/c", "exit 0"], Environment.SystemDirectory, cancel.Token));
+    }
+
+    [Fact]
+    public async Task RunAsync_does_not_deadlock_when_the_program_echoes_input_larger_than_the_pipes()
+    {
+        var input = string.Concat(Enumerable.Repeat(new string('x', 99) + "\n", 50_000)); // About 5 MB.
+
+        var result = await runner.RunAsync(
+            "findstr.exe", ["^"], folder.Path, TestContext.Current.CancellationToken, standardInput: input)
+            .WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(input.Length, result.StandardOutput.Replace("\r\n", "\n").Length);
+    }
+
+    [Fact]
+    public async Task RunAsync_observes_cancellation_while_writing_input_to_a_program_that_never_reads_it()
+    {
+        using var cancel = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        cancel.CancelAfter(TimeSpan.FromMilliseconds(300));
+        var input = new string('x', 8_000_000); // Far more than a pipe holds.
+
+        var run = runner.RunAsync(
+            "cmd.exe", ["/c", "ping -n 30 127.0.0.1 >nul"], Environment.SystemDirectory, cancel.Token, standardInput: input);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => run.WaitAsync(TimeSpan.FromSeconds(15), TestContext.Current.CancellationToken));
     }
 }

@@ -1,4 +1,6 @@
 using System.ComponentModel;
+using System.Text;
+using System.Text.Json;
 using NexerAI.Adapters.Processes;
 using NexerAI.Core.ClaudeCode;
 using NexerAI.Core.Domain;
@@ -21,6 +23,8 @@ public sealed class ClaudeCodeAgentInstaller : IAgentInstaller
     /// (https://code.claude.com/docs/en/troubleshoot-install). An <c>.exe</c> comes first, as with the default <c>PATHEXT</c>.
     /// </summary>
     private static readonly string[] ClaudeFileNames = ["claude.exe", "claude.cmd"];
+
+    private static readonly TimeSpan RestoreTimeout = TimeSpan.FromSeconds(30);
 
     private readonly IProcessRunner processRunner;
 
@@ -100,6 +104,8 @@ public sealed class ClaudeCodeAgentInstaller : IAgentInstaller
     /// <c>claude mcp add --transport stdio --scope &lt;scope&gt; &lt;name&gt; -- &lt;command&gt; [args...]</c>
     /// (https://code.claude.com/docs/en/mcp#option-3-add-a-local-stdio-server). Never <c>--env</c>: Claude Code
     /// stores its values in plain text, so a secret reaches the server through the launcher instead (design 4.4).
+    /// When the <c>add</c> after a <c>remove</c> fails or is cancelled, the previous stdio command line (read from
+    /// <c>.claude.json</c>, never its <c>env</c>) is registered again once, and the error says whether it was restored.
     /// </remarks>
     /// <exception cref="AgentStateException">
     /// <c>.claude.json</c> cannot be read or is not recognized, <c>claude</c> cannot be run, or a command exits with
@@ -111,22 +117,103 @@ public sealed class ClaudeCodeAgentInstaller : IAgentInstaller
         ct.ThrowIfCancellationRequested();
 
         var scope = ScopeName(registration.Scope);
+        McpServerRegistration? previous = null;
+        string? projectFolder = null;
+        var present = false;
         if (ReadConfig() is { } json)
         {
-            var projectFolder = ClaudeConfig.ProjectFolder(fileSystem, workingDirectory);
-            if (ClaudeConfig.ReadMcpServers(json, projectFolder).Contains(new InstalledMcpServer(registration.Name, registration.Scope)))
+            projectFolder = ClaudeConfig.ProjectFolder(fileSystem, workingDirectory);
+            present = ClaudeConfig.ReadMcpServers(json, projectFolder).Contains(new InstalledMcpServer(registration.Name, registration.Scope));
+            if (present && ClaudeConfig.RunsCommand(json, projectFolder, registration))
             {
-                if (ClaudeConfig.RunsCommand(json, projectFolder, registration))
-                {
-                    return;
-                }
+                return;
+            }
 
-                await RunMcpCommandAsync("remove", [], scope, registration.Name, [], ct).ConfigureAwait(false);
+            if (present)
+            {
+                previous = ClaudeConfig.ReadMcpCommandLine(json, projectFolder, registration.Name, registration.Scope);
             }
         }
 
-        await RunMcpCommandAsync(
-            "add", ["--transport", "stdio"], scope, registration.Name, ["--", registration.Command, .. registration.Arguments], ct).ConfigureAwait(false);
+        if (present)
+        {
+            try
+            {
+                await RunMcpCommandAsync("remove", [], scope, registration.Name, [], ct).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (IsReplacementFailure(ex, ct) && IsEntryGone(registration, projectFolder!))
+            {
+                // The remove failed or was cancelled after it had already taken the entry out.
+                throw await ReplacementFailedAsync(registration, scope, previous, ex).ConfigureAwait(false);
+            }
+        }
+
+        try
+        {
+            await AddAsync(registration, scope, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (present && IsReplacementFailure(ex, ct))
+        {
+            // The old server is gone: put it back, so a failed or cancelled replacement does not leave the person without it.
+            throw await ReplacementFailedAsync(registration, scope, previous, ex).ConfigureAwait(false);
+        }
+    }
+
+    private static bool IsReplacementFailure(Exception ex, CancellationToken ct) =>
+        ex is AgentStateException || (ex is OperationCanceledException && ct.IsCancellationRequested);
+
+    /// <summary>Whether <c>.claude.json</c> no longer holds the server; any trouble reading it counts as "still there".</summary>
+    private bool IsEntryGone(McpServerRegistration registration, string projectFolder)
+    {
+        try
+        {
+            return ReadConfig() is { } json
+                && !ClaudeConfig.ReadMcpServers(json, projectFolder).Contains(new InstalledMcpServer(registration.Name, registration.Scope));
+        }
+        catch (AgentStateException)
+        {
+            return false;
+        }
+    }
+
+    private async Task<AgentStateException> ReplacementFailedAsync(
+        McpServerRegistration registration, string scope, McpServerRegistration? previous, Exception cause)
+    {
+        var restored = await TryRestoreAsync(previous, scope).ConfigureAwait(false);
+        var what = cause is OperationCanceledException ? "was cancelled" : "failed";
+        return new AgentStateException(
+            $"Replacing the MCP server '{registration.Name}' ({scope} scope) {what} after its old entry was removed; "
+            + (restored
+                ? "its previous command line was restored, without its environment variables or headers: set those again if the server needs them."
+                : "the previous entry could not be restored, so the server is now missing: run 'nexer-ai project' again to register it."),
+            cause);
+    }
+
+    private Task AddAsync(McpServerRegistration registration, string scope, CancellationToken ct) =>
+        RunMcpCommandAsync(
+            "add", ["--transport", "stdio"], scope, registration.Name, ["--", registration.Command, .. registration.Arguments], ct);
+
+    /// <summary>
+    /// Registers <paramref name="previous"/> again, once, with its own short timeout: the token of the caller may be the
+    /// reason the replacement stopped. Never throws; <see langword="false"/> when there is nothing to restore or it failed.
+    /// </summary>
+    private async Task<bool> TryRestoreAsync(McpServerRegistration? previous, string scope)
+    {
+        if (previous is null)
+        {
+            return false;
+        }
+
+        using var timeout = new CancellationTokenSource(RestoreTimeout);
+        try
+        {
+            await AddAsync(previous, scope, timeout.Token).ConfigureAwait(false);
+            return true;
+        }
+        catch (Exception ex) when (ex is AgentStateException or OperationCanceledException)
+        {
+            return false;
+        }
     }
 
     /// <summary>The text of <c>.claude.json</c>, or <see langword="null"/> when it does not exist yet: Claude Code creates it on first use.</summary>
@@ -155,8 +242,13 @@ public sealed class ClaudeCodeAgentInstaller : IAgentInstaller
     /// Runs <c>claude plugin install &lt;name&gt;@&lt;marketplace&gt; --scope &lt;scope&gt; --json</c> with one
     /// <c>--config key=value</c> per configuration value, ordered by key: the values are on the command line, so they
     /// must not be secrets (https://code.claude.com/docs/en/plugins/cli-reference#plugin-install). A plugin already
-    /// installed at that scope is a success. The planner never asks for a disabled one, which this would enable again.
+    /// installed at that scope is a success; since <c>install</c> then ignores <c>--config</c> (no <c>configApplied</c> in
+    /// its result), the values are saved with <c>claude plugin configure &lt;id&gt; --values-stdin --json</c>, a JSON
+    /// object on standard input, never on the command line
+    /// (https://code.claude.com/docs/en/plugins/cli-reference#plugin-configure, Claude Code 2.1.285 or later).
+    /// The planner never asks for a disabled plugin, which this would enable again.
     /// </remarks>
+    /// <exception cref="ArgumentException">A configuration key is empty or holds <c>=</c> or whitespace. The value is never quoted.</exception>
     /// <exception cref="AgentStateException">
     /// <c>claude</c> cannot be run, the result is <c>failed</c>, a configuration value was not applied, the command
     /// exits with another code than 0, or it prints no result line. The message names the plugin and the failure
@@ -165,6 +257,15 @@ public sealed class ClaudeCodeAgentInstaller : IAgentInstaller
     public async Task InstallPluginAsync(PluginInstallRequest request, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(request);
+        foreach (var key in request.Config.Keys)
+        {
+            if (key.Length == 0 || key.Contains('=', StringComparison.Ordinal) || key.Any(char.IsWhiteSpace))
+            {
+                throw new ArgumentException("A plugin configuration key must not be empty or contain '=' or whitespace.", nameof(request));
+            }
+        }
+
+        ct.ThrowIfCancellationRequested();
 
         var id = $"{request.Name}@{request.Marketplace}";
         List<string> arguments = ["plugin", "install", id, "--scope", ScopeName(request.Scope), "--json"];
@@ -191,9 +292,47 @@ public sealed class ClaudeCodeAgentInstaller : IAgentInstaller
             throw new AgentStateException($"The output of 'claude plugin install {id} --json' has no result line; this version of nexer-ai does not recognize it.");
         }
 
+        if (request.Config.Count == 0)
+        {
+            return;
+        }
+
         if (outcome.ConfigApplied == false)
         {
             throw new AgentStateException($"Claude Code installed the plugin {id} but did not apply its configuration values; 'claude plugin configure {id}' lists its options.");
+        }
+
+        if (outcome.ConfigApplied is null)
+        {
+            // Already installed: install left its options alone.
+            await ConfigurePluginAsync(id, request.Config, ct).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Runs <c>claude plugin configure &lt;id&gt; --values-stdin --json</c> with the values as a JSON object on standard
+    /// input. The error names the plugin and the exit code, never a value.
+    /// </summary>
+    private async Task ConfigurePluginAsync(string id, IReadOnlyDictionary<string, string> config, CancellationToken ct)
+    {
+        using var buffer = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(buffer))
+        {
+            writer.WriteStartObject();
+            foreach (var (key, value) in config.OrderBy(c => c.Key, StringComparer.Ordinal))
+            {
+                writer.WriteString(key, value);
+            }
+
+            writer.WriteEndObject();
+        }
+
+        var result = await RunClaudeAsync(["plugin", "configure", id, "--values-stdin", "--json"], ct, Encoding.UTF8.GetString(buffer.ToArray()))
+            .ConfigureAwait(false);
+        if (result.ExitCode != 0)
+        {
+            throw new AgentStateException(
+                $"The plugin {id} is installed but its options were not applied: 'claude plugin configure {id} --values-stdin' exited with code {result.ExitCode}.");
         }
     }
 
@@ -202,13 +341,13 @@ public sealed class ClaudeCodeAgentInstaller : IAgentInstaller
     /// that exact folder, and MCP servers at local scope to its repository root (design 4.4).
     /// </summary>
     /// <exception cref="AgentStateException"><c>claude</c> is not on <c>PATH</c>, cannot be started or cannot be run safely.</exception>
-    private async Task<ProcessResult> RunClaudeAsync(IReadOnlyList<string> arguments, CancellationToken ct)
+    private async Task<ProcessResult> RunClaudeAsync(IReadOnlyList<string> arguments, CancellationToken ct, string? standardInput = null)
     {
         var claude = FindClaude() ?? throw new AgentStateException(
             $@"Claude Code was not found: no claude.exe or claude.cmd in the folders on PATH. Install it (the native installer puts claude.exe in %USERPROFILE%\.local\bin, see {SetupPage}), open a new terminal and try again.");
         try
         {
-            return await processRunner.RunAsync(claude, arguments, workingDirectory, ct).ConfigureAwait(false);
+            return await processRunner.RunAsync(claude, arguments, workingDirectory, ct, standardInput).ConfigureAwait(false);
         }
         catch (Win32Exception ex)
         {

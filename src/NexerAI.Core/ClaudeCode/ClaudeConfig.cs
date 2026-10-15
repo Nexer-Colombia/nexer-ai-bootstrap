@@ -145,6 +145,64 @@ public static class ClaudeConfig
         }
     }
 
+    /// <summary>
+    /// The command line of the stdio MCP server <paramref name="name"/> at <paramref name="scope"/>, read like
+    /// <see cref="RunsCommand"/> so that it can be registered again: its <c>command</c> and <c>args</c> (none when
+    /// missing), the first entry when several keys name <paramref name="projectFolder"/>. <see langword="null"/> when
+    /// there is no such server, when it is remote (<c>url</c>), or when its <c>command</c> or <c>args</c> has another
+    /// shape. <c>env</c> and <c>headers</c> are never read.
+    /// </summary>
+    /// <exception cref="AgentStateException">The text is not valid JSON.</exception>
+    public static McpServerRegistration? ReadMcpCommandLine(string json, string projectFolder, string name, PluginScope scope)
+    {
+        ArgumentNullException.ThrowIfNull(json);
+        ArgumentNullException.ThrowIfNull(projectFolder);
+        ArgumentNullException.ThrowIfNull(name);
+
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            foreach (var (key, owner) in McpServerOwners(document.RootElement))
+            {
+                if ((key is null ? PluginScope.User : PluginScope.Local) != scope
+                    || (key is not null && !WindowsPath.SameFolder(key, projectFolder))
+                    || owner.ValueKind != JsonValueKind.Object
+                    || !owner.TryGetProperty("mcpServers", out var entries)
+                    || entries.ValueKind != JsonValueKind.Object
+                    || !entries.TryGetProperty(name, out var server))
+                {
+                    continue;
+                }
+
+                return CommandLineOf(server) is { } line ? new McpServerRegistration(name, scope, line.Command, line.Arguments) : null;
+            }
+
+            return null;
+        }
+        catch (JsonException ex)
+        {
+            throw Unrecognized($"is not valid JSON{JsonErrors.Where(ex)}");
+        }
+    }
+
+    private static (string Command, string[] Arguments)? CommandLineOf(JsonElement server)
+    {
+        if (!HasString(server, "command"))
+        {
+            return null;
+        }
+
+        var command = server.GetProperty("command").GetString()!;
+        if (!server.TryGetProperty("args", out var args))
+        {
+            return (command, []);
+        }
+
+        return args.ValueKind == JsonValueKind.Array && args.EnumerateArray().All(arg => arg.ValueKind == JsonValueKind.String)
+            ? (command, [.. args.EnumerateArray().Select(arg => arg.GetString()!)])
+            : null;
+    }
+
     private static bool HasCommandLine(JsonElement server, string command, IReadOnlyList<string> arguments)
     {
         if (!HasString(server, "command") || server.GetProperty("command").GetString() != command)

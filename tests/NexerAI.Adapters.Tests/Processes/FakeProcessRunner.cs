@@ -16,9 +16,14 @@ public sealed class FakeProcessRunner : IProcessRunner
 
     public List<(string FileName, IReadOnlyList<string> Arguments, string WorkingDirectory)> Runs { get; } = [];
 
-    public Task<ProcessResult> RunAsync(string fileName, IReadOnlyList<string> arguments, string workingDirectory, CancellationToken ct)
+    /// <summary>What each run was given on standard input, in the order of <see cref="Runs"/>; <see langword="null"/> for none.</summary>
+    public List<string?> Inputs { get; } = [];
+
+    public Task<ProcessResult> RunAsync(
+        string fileName, IReadOnlyList<string> arguments, string workingDirectory, CancellationToken ct, string? standardInput = null)
     {
         Runs.Add((fileName, arguments, workingDirectory));
+        Inputs.Add(standardInput);
         return Exception is null
             ? Task.FromResult(Results.TryDequeue(out var next) ? next : Result)
             : Task.FromException<ProcessResult>(Exception);

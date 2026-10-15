@@ -142,6 +142,54 @@ public sealed class ClaudeConfigTests
         Assert.Equal(expected, ClaudeConfig.RunsCommand(json, "C:/t/ap", new("s", PluginScope.User, "x", [])));
     }
 
+    [Theory]
+    [InlineData("nexer-jira", PluginScope.Local, "cmd", new[] { "/c", "echo", "local" })]
+    [InlineData("nexer-userecho", PluginScope.User, "cmd", new[] { "/c", "echo", "hi" })]
+    public void ReadMcpCommandLine_returns_the_command_and_arguments_of_a_stdio_server(
+        string name, PluginScope scope, string command, string[] arguments)
+    {
+        var found = ClaudeConfig.ReadMcpCommandLine(Sample("claude-json-2.1.300.json"), "C:/t/ap", name, scope);
+
+        Assert.NotNull(found);
+        Assert.Equal((name, scope, command), (found.Name, found.Scope, found.Command));
+        Assert.Equal(arguments, found.Arguments);
+    }
+
+    [Theory]
+    [InlineData("nexer-remote", PluginScope.Local)]
+    [InlineData("nexer-other", PluginScope.Local)]
+    [InlineData("nexer-jira", PluginScope.User)]
+    [InlineData("nexer-missing", PluginScope.Local)]
+    public void ReadMcpCommandLine_is_null_for_a_remote_server_another_project_scope_or_no_server(string name, PluginScope scope)
+    {
+        Assert.Null(ClaudeConfig.ReadMcpCommandLine(Sample("claude-json-2.1.300.json"), "C:/t/ap", name, scope));
+    }
+
+    [Theory]
+    [InlineData("""{"mcpServers": {"s": {"command": "x"}}}""", true)]
+    [InlineData("""{"mcpServers": {"s": {"command": "x", "args": null}}}""", false)]
+    [InlineData("""{"mcpServers": {"s": {"command": "x", "args": [1]}}}""", false)]
+    [InlineData("""{"mcpServers": {"s": {"command": 1}}}""", false)]
+    public void ReadMcpCommandLine_reads_missing_arguments_as_none_and_other_shapes_as_no_command_line(string json, bool found)
+    {
+        var result = ClaudeConfig.ReadMcpCommandLine(json, "C:/t/ap", "s", PluginScope.User);
+
+        Assert.Equal(found, result is not null);
+        Assert.Empty(result?.Arguments ?? []);
+    }
+
+    [Fact]
+    public void ReadMcpCommandLine_never_reads_env_and_rejects_invalid_JSON_without_quoting_it()
+    {
+        var found = ClaudeConfig.ReadMcpCommandLine(
+            """{"mcpServers": {"s": {"command": "x", "env": {"T": "ghp_secret"}}}}""", "C:/t/ap", "s", PluginScope.User);
+        var error = Assert.Throws<AgentStateException>(
+            () => ClaudeConfig.ReadMcpCommandLine("""{"mcpServers": {"s": {"env": {"T": "ghp_secret"}""", "C:/t/ap", "s", PluginScope.User));
+
+        Assert.DoesNotContain("ghp_", found!.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("ghp_", error.ToString(), StringComparison.Ordinal);
+    }
+
     [Fact]
     public void RunsCommand_is_false_when_any_key_naming_the_project_holds_another_command()
     {
