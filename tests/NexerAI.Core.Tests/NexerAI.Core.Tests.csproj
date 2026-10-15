@@ -15,5 +15,7 @@
     <None Include="..\..\test-vectors\*.json" LinkBase="test-vectors" CopyToOutputDirectory="PreserveNewest" />
     <!-- Status line input recorded from Claude Code (see StatusLineInputParserTests). -->
     <None Update="StatusLine\Samples\*.json" CopyToOutputDirectory="PreserveNewest" />
+    <!-- Claude Code output and config recorded in an isolated config (see ClaudeCode tests). -->
+    <None Update="ClaudeCode\Samples\*.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

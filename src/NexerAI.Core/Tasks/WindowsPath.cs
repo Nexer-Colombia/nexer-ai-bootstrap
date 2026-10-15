@@ -67,6 +67,14 @@ internal sealed class WindowsPath
 
     public WindowsPath Combine(string folder) => new(root, [.. folders, folder]);
 
+    /// <summary>
+    /// Returns whether two absolute paths name the same folder, ignoring case (like Windows), the separator,
+    /// a trailing separator and <c>.</c> or <c>..</c> folders; <see langword="false"/> when either is not absolute.
+    /// </summary>
+    public static bool SameFolder(string first, string second) =>
+        Parse(first) is { } a && Parse(second) is { } b
+        && string.Equals(a.ToString(), b.ToString(), StringComparison.OrdinalIgnoreCase);
+
     public override string ToString() =>
         folders.Length == 0 ? root : $"{root.TrimEnd('/')}/{string.Join('/', folders)}";
 }

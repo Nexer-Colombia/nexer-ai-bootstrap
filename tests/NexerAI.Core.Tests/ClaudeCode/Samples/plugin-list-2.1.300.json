@@ -1,0 +1,38 @@
+[
+  {
+    "id": "nexer-core@nexer",
+    "version": "1.0.0",
+    "scope": "user",
+    "enabled": true,
+    "installPath": "C:\\t\\rs\\plugins\\cache\\nexer\\nexer-core\\1.0.0",
+    "readFromFolder": "C:\\t\\mk\\plugins\\nexer-core",
+    "installedAt": "2026-10-15T15:30:47.982Z",
+    "projectEnabled": false
+  },
+  {
+    "id": "nexer-dev-umbraco@nexer",
+    "version": "1.0.0",
+    "scope": "local",
+    "enabled": true,
+    "installPath": "C:\\t\\rs\\plugins\\cache\\nexer\\nexer-dev-umbraco\\1.0.0",
+    "projectPath": "C:\\t\\ap\\sub",
+    "projectEnabled": false
+  },
+  {
+    "id": "nexer-qa@nexer",
+    "version": "1.0.0",
+    "scope": "user",
+    "enabled": false,
+    "installPath": "C:\\t\\rs\\plugins\\cache\\nexer\\nexer-qa\\1.0.0",
+    "projectEnabled": false
+  },
+  {
+    "id": "nexer-qa@nexer",
+    "version": "1.0.0",
+    "scope": "local",
+    "enabled": false,
+    "installPath": "C:\\t\\rs\\plugins\\cache\\nexer\\nexer-qa\\1.0.0",
+    "projectPath": "C:\\t\\bp",
+    "projectEnabled": false
+  }
+]
