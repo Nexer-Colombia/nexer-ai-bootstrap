@@ -1,0 +1,24 @@
+[
+  {
+    "id": "nexer-core@nexer",
+    "version": "0.1.0",
+    "scope": "local",
+    "enabled": false,
+    "installPath": "C:\\t\\cr\\plugins\\cache\\nexer\\nexer-core\\0.1.0",
+    "installedAt": "2026-10-15T20:46:57.093Z",
+    "lastUpdated": "2026-10-15T20:46:57.093Z",
+    "projectPath": "C:\\t\\pa",
+    "projectEnabled": false
+  },
+  {
+    "id": "nexer-core@nexer",
+    "version": "0.1.0",
+    "scope": "local",
+    "enabled": false,
+    "installPath": "C:\\t\\cr\\plugins\\cache\\nexer\\nexer-core\\0.1.0",
+    "installedAt": "2026-10-15T20:47:03.755Z",
+    "lastUpdated": "2026-10-15T20:47:03.755Z",
+    "projectPath": "C:\\t\\pc",
+    "projectEnabled": false
+  }
+]
