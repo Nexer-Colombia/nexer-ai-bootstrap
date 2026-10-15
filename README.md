@@ -97,6 +97,10 @@ The parsers are tested against samples recorded with an isolated `CLAUDE_CONFIG_
 
 `FileStateStore` (`src/NexerAI.Adapters/State`) implements `IStateStore`. A missing file reads as the empty state. Two terminals may run `nexer-ai project` at once, so every update holds an exclusive lock on `state.json.lock` (kept between runs), reads the file, applies the change, writes a temporary file in the same folder, flushes it to disk and moves it over `state.json`. Waiting for the lock, and for other programs to close the file, is bounded (10 seconds by default) and honors cancellation. Reads take no lock: a reader sees the old or the new file, never half of one. The file is UTF-8 without BOM.
 
+## Credentials
+
+`DpapiCredentialStore` (`src/NexerAI.Adapters/Credentials`, Windows only) implements `ICredentialStore`: one file per tracker in `%USERPROFILE%\.nexer-ai\credentials\`, encrypted with DPAPI for the current user. The tracker URL is normalized (lowercase scheme, host and path, no default port, no trailing slash) and the file is named `<sha256 of the normalized URL>.dpapi`, so neither the URL nor the secret is stored in plain text. The DPAPI entropy binds each file to its URL: a file copied over another tracker's entry does not decrypt. A URL with user info, a query or a fragment is rejected without being echoed. A file that does not decrypt raises `CredentialStoreException` with its path and is left untouched; no message ever contains the secret. Writes go to a temporary file that is moved over the entry. DPAPI does not stop a process running as the same user, so the baseline denies Claude reads of the folder.
+
 ## Task key
 
 The Nexer mod adds up agent time per task, and a task is a branch of a working copy: `<repository root>#<branch>`, for example `c:/work/acme-website#feature/12345-header`. Both are local values that never leave the machine. `TaskKeyResolver` (`src/NexerAI.Core/Tasks`) computes it by reading git files through `IReadOnlyFileSystem`, without starting git:
