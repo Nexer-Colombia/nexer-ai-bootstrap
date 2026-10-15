@@ -13,11 +13,11 @@ internal sealed class FakeConsole : IConsole
 
     private readonly StringBuilder standardOutput = new();
 
-    private readonly List<(int Checks, ConsoleKeyInfo Key)> late = [];
+    private readonly List<(int Writes, ConsoleKeyInfo Key)> late = [];
 
     private bool treatControlCAsInput;
 
-    private int checks;
+    private int writes;
 
     public bool IsInputRedirected { get; init; }
 
@@ -89,13 +89,6 @@ internal sealed class FakeConsole : IConsole
             if (KeyAvailableException is not null)
             {
                 throw KeyAvailableException;
-            }
-
-            checks++;
-            foreach (var arrival in late.Where(l => l.Checks < checks).ToList())
-            {
-                Keys.Enqueue(arrival.Key);
-                late.Remove(arrival);
             }
 
             return Stale.Count > 0
@@ -171,14 +164,14 @@ internal sealed class FakeConsole : IConsole
     }
 
     /// <summary>
-    /// Keys that appear only after <paramref name="afterChecks"/> calls of <see cref="KeyAvailable"/>, like the end
-    /// of a paste that reaches the console after the prompter looked.
+    /// Keys that appear once <paramref name="afterWrites"/> texts have been written, like the end of a paste that
+    /// reaches the console after the prompter looked, for instance while it writes the line break after a secret.
     /// </summary>
-    public FakeConsole Late(int afterChecks, string text)
+    public FakeConsole Late(int afterWrites, string text)
     {
         foreach (var c in text)
         {
-            late.Add((afterChecks, Letter(c)));
+            late.Add((afterWrites, Letter(c)));
         }
 
         return this;
@@ -223,6 +216,13 @@ internal sealed class FakeConsole : IConsole
         if (WriteException is not null && text == FailingWrite)
         {
             throw WriteException;
+        }
+
+        writes++;
+        foreach (var arrival in late.Where(l => l.Writes <= writes).ToList())
+        {
+            Keys.Enqueue(arrival.Key);
+            late.Remove(arrival);
         }
 
         output.Append(text);

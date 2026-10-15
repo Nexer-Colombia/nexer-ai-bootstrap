@@ -38,6 +38,7 @@ public sealed class ConsolePrompter : IPrompter
         }
 
         EnsureInteractive(question);
+        DiscardPendingKeys();
         console.Write(question + Environment.NewLine);
         for (var i = 0; i < choices.Count; i++)
         {
@@ -71,6 +72,7 @@ public sealed class ConsolePrompter : IPrompter
     public bool Confirm(string question)
     {
         EnsureInteractive(question);
+        DiscardPendingKeys();
         while (true)
         {
             switch (Ask($"{question} [y/N] ").ToUpperInvariant())
@@ -100,6 +102,7 @@ public sealed class ConsolePrompter : IPrompter
     public string ReadSecret(string prompt)
     {
         EnsureInteractive(prompt);
+        DiscardPendingKeys();
         bool? controlCAsInput = null;
         try
         {
