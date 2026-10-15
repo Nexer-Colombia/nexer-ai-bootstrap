@@ -1,6 +1,8 @@
 using System.Runtime.Versioning;
+using System.Security.Cryptography;
 using System.Text;
 using NexerAI.Adapters.Credentials;
+using NexerAI.Core.Credentials;
 
 namespace NexerAI.Adapters.Tests.Credentials;
 
@@ -95,6 +97,38 @@ public sealed class DpapiCredentialStoreTests : IDisposable
             Assert.False(Contains(bytes, Encoding.UTF8.GetBytes(plain)), $"UTF-8 '{plain}' found in the file.");
             Assert.False(Contains(bytes, Encoding.Unicode.GetBytes(plain)), $"UTF-16 '{plain}' found in the file.");
         }
+    }
+
+    [Fact]
+    public void A_corrupt_file_is_reported_with_its_path_and_left_untouched()
+    {
+        store.Set(Acme, Secret);
+        var file = Assert.Single(Directory.GetFiles(folder));
+        File.WriteAllBytes(file, [1, 2, 3]);
+
+        var ex = Assert.Throws<CredentialStoreException>(() => store.Get(Acme));
+
+        Assert.Contains(file, ex.Message, StringComparison.Ordinal);
+        Assert.Contains("nexer-ai project", ex.Message, StringComparison.Ordinal);
+        Assert.IsType<CryptographicException>(ex.InnerException);
+        Assert.Equal([1, 2, 3], File.ReadAllBytes(file));
+    }
+
+    [Fact]
+    public void A_file_copied_over_another_trackers_entry_does_not_decrypt_and_the_secret_is_not_in_the_message()
+    {
+        var other = new Uri("https://acme.atlassian.net");
+        store.Set(Acme, Secret);
+        var acmeFile = Assert.Single(Directory.GetFiles(folder));
+        store.Set(other, "other-token");
+        var otherFile = Directory.GetFiles(folder).Single(f => f != acmeFile);
+        File.Copy(acmeFile, otherFile, overwrite: true);
+
+        var ex = Assert.Throws<CredentialStoreException>(() => store.Get(other));
+
+        Assert.DoesNotContain(Secret, ex.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(Secret, ex.ToString(), StringComparison.Ordinal);
+        Assert.Equal(Secret, store.Get(Acme));
     }
 
     [Theory]

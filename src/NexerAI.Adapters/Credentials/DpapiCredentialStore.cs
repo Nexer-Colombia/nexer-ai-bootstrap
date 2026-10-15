@@ -1,6 +1,7 @@
 using System.Runtime.Versioning;
 using System.Security.Cryptography;
 using System.Text;
+using NexerAI.Core.Credentials;
 using NexerAI.Core.Ports;
 
 namespace NexerAI.Adapters.Credentials;
@@ -47,6 +48,7 @@ public sealed class DpapiCredentialStore : ICredentialStore
 
     /// <inheritdoc />
     /// <exception cref="ArgumentException"><paramref name="trackerUrl"/> is not an absolute http or https address without user info, query or fragment.</exception>
+    /// <exception cref="CredentialStoreException">The file does not decrypt; the message names its path and the file is left untouched.</exception>
     public string? Get(Uri trackerUrl)
     {
         var key = KeyOf(trackerUrl);
@@ -60,7 +62,18 @@ public sealed class DpapiCredentialStore : ICredentialStore
             return null;
         }
 
-        var plain = ProtectedData.Unprotect(blob, EntropyOf(key), DataProtectionScope.CurrentUser);
+        byte[] plain;
+        try
+        {
+            plain = ProtectedData.Unprotect(blob, EntropyOf(key), DataProtectionScope.CurrentUser);
+        }
+        catch (CryptographicException ex)
+        {
+            throw new CredentialStoreException(
+                $"Cannot decrypt the credential file '{PathOf(key)}': it is corrupt, was copied from another entry or belongs to another Windows user or machine. Run 'nexer-ai project' to enter the credential again.",
+                ex);
+        }
+
         try
         {
             return Encoding.UTF8.GetString(plain);

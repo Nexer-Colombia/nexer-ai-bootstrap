@@ -10,6 +10,7 @@ public interface ICredentialStore
     bool Exists(Uri trackerUrl);
 
     /// <summary>Returns the stored secret, or <see langword="null"/> when there is none.</summary>
+    /// <exception cref="Credentials.CredentialStoreException">A secret is stored but cannot be read back.</exception>
     string? Get(Uri trackerUrl);
 
     /// <summary>Stores or replaces the secret for the tracker.</summary>
