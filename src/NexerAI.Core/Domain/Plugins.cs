@@ -21,6 +21,10 @@ public sealed record InstalledPlugin(string Name, string Marketplace, string Ver
 /// A plugin to install from a marketplace (the channel name, see <see cref="Channel.Name"/>),
 /// with its non-interactive configuration values.
 /// </summary>
+/// <param name="Config">
+/// Non-secret <c>userConfig</c> values only: they are passed on the command line. Secrets, such as the Engram token,
+/// go through <c>claude plugin configure --values-stdin</c> instead (design 4.4, <c>project</c> step 2).
+/// </param>
 public sealed record PluginInstallRequest(string Name, string Marketplace, PluginScope Scope, IReadOnlyDictionary<string, string> Config);
 
 /// <summary>A stdio MCP server to register; secrets are never part of it.</summary>
