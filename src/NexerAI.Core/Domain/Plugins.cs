@@ -27,6 +27,27 @@ public sealed record InstalledPlugin(string Name, string Marketplace, string Ver
 /// </param>
 public sealed record PluginInstallRequest(string Name, string Marketplace, PluginScope Scope, IReadOnlyDictionary<string, string> Config);
 
+/// <summary>A plugin marketplace as the agent reports it, identified by its <paramref name="Name"/>.</summary>
+/// <param name="Source">The source type, such as <c>github</c>, <c>git</c> or <c>directory</c>.</param>
+/// <param name="Repository">The <c>owner/repo</c> of a <c>github</c> source; <see langword="null"/> for other sources.</param>
+/// <param name="Ref">The pinned branch or tag, or <see langword="null"/> when the source is not pinned.</param>
+public sealed record RegisteredMarketplace(string Name, string Source, string? Repository, string? Ref)
+{
+    /// <summary>
+    /// Whether this is exactly how the bootstrap registers <paramref name="channel"/>: its name, a <c>github</c> source
+    /// for its repository spelled the same (ordinal), and no ref, as <c>strictKnownMarketplaces</c> will expect
+    /// (design 4.1).
+    /// </summary>
+    public bool IsRegistrationOf(Channel channel)
+    {
+        ArgumentNullException.ThrowIfNull(channel);
+        return string.Equals(Name, channel.Name, StringComparison.Ordinal)
+            && string.Equals(Source, "github", StringComparison.Ordinal)
+            && string.Equals(Repository, channel.Repository, StringComparison.Ordinal)
+            && Ref is null;
+    }
+}
+
 /// <summary>A stdio MCP server to register; secrets are never part of it.</summary>
 public sealed record McpServerRegistration(string Name, PluginScope Scope, string Command, IReadOnlyList<string> Arguments);
 
