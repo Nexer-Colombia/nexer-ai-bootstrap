@@ -3,6 +3,7 @@
     <IsAotCompatible>true</IsAotCompatible>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" />
     <ProjectReference Include="..\NexerAI.Core\NexerAI.Core.csproj" />
   </ItemGroup>
 </Project>
