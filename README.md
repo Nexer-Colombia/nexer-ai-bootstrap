@@ -67,6 +67,16 @@ The rules live in one table in the detector. A new signal is one entry there, ad
 
 `InstallPlanner` diffs it against what the agent reports and returns `InstallPlugin` and `AddMcpServer` actions, so a second run only fixes drift. A plugin counts as present when the same name, marketplace and scope is installed, whatever its version and even when the person disabled it (installing it again would enable it); an MCP server when the same name and scope is registered. Removing what is no longer wanted (it needs the state file), switching channel, credentials, plugin configuration values and drift in a server's command or arguments are not handled yet.
 
+## Reading Claude Code's state
+
+`ClaudeCodeAgentInstaller` (`src/NexerAI.Adapters/ClaudeCode`) implements the read side of `IAgentInstaller` for one working directory, verified on Claude Code 2.1.300 (design 4.4). Install and MCP registration come in a later unit and throw `NotImplementedException` for now.
+
+- Plugins: it runs `claude plugin list --json` in the working directory through `IProcessRunner` (`src/NexerAI.Adapters/Processes`; `claude.exe` from the native installer, found on `PATH`) and `ClaudePluginList` keeps user-scope plugins and the local-scope plugins whose `projectPath` is that exact folder: a local plugin installed in a subfolder does not apply at the repository root, nor the reverse. Other scopes and ids are skipped. `enabled` is kept, and a disabled plugin still counts as installed ([JSON output](https://code.claude.com/docs/en/plugins/cli-reference#json-output)).
+- MCP servers: `claude mcp list` and `get` start the servers to check them ([MCP](https://code.claude.com/docs/en/mcp)), so `ClaudeConfig` reads `.claude.json` instead (`$CLAUDE_CONFIG_DIR\.claude.json`, else `%USERPROFILE%\.claude.json`): the top-level `mcpServers` (user scope, observed) and `projects["<key>"].mcpServers` (local scope, documented). The key is the repository root with forward slashes, found like the task key, or the working directory outside a repository; keys match ignoring case and separators. Only names and scopes are read, never `env` or `headers`. A missing file means no servers.
+- Errors: a `claude` that cannot start or fails, or output or a file with a shape it does not recognize, raise `AgentStateException`, whose message never quotes the output or the file. `doctor` will show it as a warning.
+
+The parsers are tested against samples recorded with an isolated `CLAUDE_CONFIG_DIR` (`tests/NexerAI.Core.Tests/ClaudeCode/Samples`).
+
 ## State file
 
 `%USERPROFILE%\.nexer-ai\state.json` records what the bootstrap installed: the channel (marketplace name), the role token, the user-scope plugin versions and, per project keyed by normalized remote, the matched profile and the local plugins and MCP servers. It never holds secrets.
