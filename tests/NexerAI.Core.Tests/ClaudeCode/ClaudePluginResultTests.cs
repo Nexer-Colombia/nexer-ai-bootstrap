@@ -47,6 +47,27 @@ public sealed class ClaudePluginResultTests
         Assert.Equal(new ClaudePluginResult(Succeeded: false, FailureCode: "not_found", ConfigApplied: null), result);
     }
 
+    [Fact]
+    public void Parse_reads_the_marketplace_a_marketplace_command_acted_on()
+    {
+        // Recorded on 2.1.301 (message shortened).
+        var result = ClaudePluginResult.Parse(
+            """{"command":"marketplace-add","outcome":"ok","marketplace":"nexer","message":"Successfully added marketplace: nexer (declared in user settings)"}""");
+
+        Assert.Equal(new ClaudePluginResult(Succeeded: true, FailureCode: null, ConfigApplied: null, Marketplace: "nexer"), result);
+    }
+
+    [Theory]
+    [InlineData("""{"command":"disable","outcome":"failed","plugin":"nexer-core@nexer","scope":"local","message":"m","failureCode":"already_in_goal_state","alreadyInGoalState":true}""", "already_in_goal_state")]
+    [InlineData("""{"command":"uninstall","outcome":"failed","plugin":"nexer-core@nexer","scope":"user","message":"m","failureCode":"not_installed_at_scope","installedScope":"local"}""", "not_installed_at_scope")]
+    [InlineData("""{"command":"uninstall","outcome":"failed","plugin":"nexer-core@nexer","scope":"local","message":"m","failureCode":"not_installed"}""", "not_installed")]
+    [InlineData("""{"command":"marketplace-remove","marketplace":"nexer","outcome":"failed","message":"m","failureCode":"not_configured"}""", "not_configured")]
+    public void Parse_reads_the_failure_codes_recorded_from_disable_uninstall_and_marketplace_remove(string line, string code)
+    {
+        // Recorded on 2.1.301 (messages shortened): each command run again once its work was done.
+        Assert.Equal(code, ClaudePluginResult.Parse(line)!.FailureCode);
+    }
+
     [Theory]
     [InlineData("failure code")]
     [InlineData("ghp_0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")]

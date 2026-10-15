@@ -4,9 +4,10 @@ using System.Text.Json;
 namespace NexerAI.Core.ClaudeCode;
 
 /// <summary>
-/// The result line <c>--json</c> adds to <c>claude plugin install</c>: one JSON object on the last line of standard
-/// output, with <c>command</c>, <c>outcome</c> (<c>ok</c> or <c>failed</c>) and <c>message</c> always present and
-/// <c>failureCode</c> when it applies (https://code.claude.com/docs/en/plugins/cli-reference#plugin-json-result).
+/// The result line <c>--json</c> adds to <c>claude plugin install</c>, <c>uninstall</c>, <c>enable</c>, <c>disable</c>
+/// and the <c>marketplace</c> commands: one JSON object on the last line of standard output, with <c>command</c>,
+/// <c>outcome</c> (<c>ok</c> or <c>failed</c>) and <c>message</c> always present and <c>failureCode</c> and
+/// <c>marketplace</c> when they apply (https://code.claude.com/docs/en/plugins/cli-reference#plugin-json-result).
 /// The message is never kept: it can quote configuration values.
 /// </summary>
 /// <param name="Succeeded">Whether <c>outcome</c> is <c>ok</c>, which includes a plugin already installed at that scope.</param>
@@ -16,7 +17,8 @@ namespace NexerAI.Core.ClaudeCode;
 /// <c>--config</c> key the plugin does not declare still installs with outcome <c>ok</c>, exit code 0 and
 /// <c>configApplied</c> <see langword="false"/>.
 /// </param>
-public sealed record ClaudePluginResult(bool Succeeded, string? FailureCode, bool? ConfigApplied)
+/// <param name="Marketplace">The <c>marketplace</c> field of a marketplace command, the name it acted on, or <see langword="null"/> when absent.</param>
+public sealed record ClaudePluginResult(bool Succeeded, string? FailureCode, bool? ConfigApplied, string? Marketplace = null)
 {
     private const int MaxFailureCodeLength = 40;
 
@@ -45,12 +47,13 @@ public sealed record ClaudePluginResult(bool Succeeded, string? FailureCode, boo
             bool? configApplied = root.TryGetProperty("configApplied", out var applied) && applied.ValueKind is JsonValueKind.True or JsonValueKind.False
                 ? applied.GetBoolean()
                 : null;
+            string? marketplace = root.TryGetProperty("marketplace", out var name) && name.ValueKind == JsonValueKind.String ? name.GetString() : null;
             return outcome.ValueKind != JsonValueKind.String
                 ? null
                 : outcome.GetString() switch
                 {
-                    "ok" => new ClaudePluginResult(true, null, configApplied),
-                    "failed" => new ClaudePluginResult(false, ReadFailureCode(root), configApplied),
+                    "ok" => new ClaudePluginResult(true, null, configApplied, marketplace),
+                    "failed" => new ClaudePluginResult(false, ReadFailureCode(root), configApplied, marketplace),
                     _ => null,
                 };
         }
