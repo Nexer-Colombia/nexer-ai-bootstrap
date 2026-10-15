@@ -68,17 +68,17 @@ public sealed class FileStateStoreTests : IDisposable
     [Fact]
     public async Task A_corrupt_file_is_reported_with_its_path_and_left_untouched()
     {
-        root.WriteFile(@".nexer-ai\state.json", "{ \"schema\": 2 }");
+        root.WriteFile(@".nexer-ai\state.json", "{ \"schema\": 3 }");
         var called = false;
 
         var read = await Assert.ThrowsAsync<StateFileException>(() => store.ReadAsync(Ct));
         var update = await Assert.ThrowsAsync<StateFileException>(() => store.UpdateAsync(s => { called = true; return s; }, Ct));
 
         Assert.All([read, update], ex => Assert.Contains(statePath, ex.Message, StringComparison.Ordinal));
-        Assert.All([read, update], ex => Assert.Contains("schema version 2", ex.Message, StringComparison.Ordinal));
+        Assert.All([read, update], ex => Assert.Contains("schema version 3", ex.Message, StringComparison.Ordinal));
         Assert.IsType<StateFileException>(read.InnerException);
         Assert.False(called);
-        Assert.Equal("{ \"schema\": 2 }", await File.ReadAllTextAsync(statePath, Ct));
+        Assert.Equal("{ \"schema\": 3 }", await File.ReadAllTextAsync(statePath, Ct));
     }
 
     [Fact]

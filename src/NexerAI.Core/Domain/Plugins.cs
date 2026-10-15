@@ -48,6 +48,20 @@ public sealed record RegisteredMarketplace(string Name, string Source, string? R
     }
 }
 
+/// <summary>
+/// One installation of a plugin: its id (<c>Name@Marketplace</c>), its scope and, at local scope, the exact folder it
+/// belongs to. A local plugin applies only in the folder where it was installed (observed on 2.1.300, design 4.4).
+/// </summary>
+/// <param name="Folder">
+/// The absolute folder of a local-scope installation, as <c>projectPath</c> of <c>claude plugin list --json</c> reports
+/// it; <see langword="null"/> at user scope.
+/// </param>
+public sealed record PluginLocation(string Name, string Marketplace, PluginScope Scope, string? Folder)
+{
+    /// <summary>The plugin id as Claude Code writes it: <c>name@marketplace</c>.</summary>
+    public string Id => $"{Name}@{Marketplace}";
+}
+
 /// <summary>A stdio MCP server to register; secrets are never part of it.</summary>
 public sealed record McpServerRegistration(string Name, PluginScope Scope, string Command, IReadOnlyList<string> Arguments);
 

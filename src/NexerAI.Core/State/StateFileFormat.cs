@@ -7,21 +7,25 @@ using NexerAI.Core.Domain;
 namespace NexerAI.Core.State;
 
 /// <summary>
-/// Reads and writes the JSON of the state file, schema version 1 (design 4.4). The channel is stored
-/// by its marketplace name (<see cref="Channel.Name"/>) and the role by its token (<see cref="RoleTokens"/>).
+/// Reads and writes the JSON of the state file (design 4.4). The channel is stored by its marketplace name
+/// (<see cref="Channel.Name"/>) and the role by its token (<see cref="RoleTokens"/>). Schema 2 added
+/// <c>channelSwitch</c>; schema 1 files are still read, as schema 2 without a switch.
 /// </summary>
 public static class StateFileFormat
 {
-    /// <summary>The only schema version this code reads and writes.</summary>
-    public const int SchemaVersion = 1;
+    /// <summary>The schema version this code writes.</summary>
+    public const int SchemaVersion = 2;
+
+    /// <summary>The oldest schema version this code still reads.</summary>
+    public const int OldestReadableSchemaVersion = 1;
 
     private static readonly JsonDocumentOptions DocumentOptions = new() { AllowDuplicateProperties = false };
 
     /// <summary>
     /// Returns the JSON text of <paramref name="state"/>: indented with two spaces, <c>\n</c> line ends
     /// and a final newline, properties in the order <c>schema</c>, <c>channel</c>, <c>role</c>,
-    /// <c>installed</c>, <c>projects</c>, dictionary keys sorted ordinally and lists in their own order.
-    /// A <see langword="null"/> channel or role is left out.
+    /// <c>installed</c>, <c>projects</c>, <c>channelSwitch</c>, dictionary keys sorted ordinally and lists in their own
+    /// order. A <see langword="null"/> channel, role or switch, and the folder of a user-scope location, are left out.
     /// </summary>
     public static string Serialize(InstallState state)
     {
@@ -46,6 +50,7 @@ public static class StateFileFormat
             Role = state.Role?.ToToken(),
             Installed = installed,
             Projects = projects,
+            ChannelSwitch = state.Switch is { } pending ? ChannelSwitchDocument.Create(pending) : null,
         };
         return JsonSerializer.Serialize(document, StateFileJsonContext.Default.StateFileDocument) + "\n";
     }
@@ -53,22 +58,25 @@ public static class StateFileFormat
     /// <summary>
     /// Parses the JSON text of a state file. Unknown properties are ignored; missing or <see langword="null"/>
     /// <c>channel</c>, <c>role</c>, <c>installed</c>, <c>projects</c>, <c>plugins</c> and <c>mcp</c> read as
-    /// absent or empty.
+    /// absent or empty, and so does a missing or <see langword="null"/> <c>channelSwitch</c> or <c>personDisabled</c>.
+    /// A schema 1 file has no switch: its <c>channelSwitch</c>, if any, is ignored like any unknown property.
     /// </summary>
     /// <exception cref="StateFileException">
-    /// The text is not valid JSON (duplicate property names included), its <c>schema</c> is missing or not
+    /// The text is not valid JSON (duplicate property names included), its <c>schema</c> is missing or neither 1 nor
     /// <see cref="SchemaVersion"/>, or a value is invalid: unknown channel or role, a <see langword="null"/>
-    /// version, project, profile or list entry.
+    /// version, project, profile or list entry, or a switch without two different known channels or with a disabled
+    /// plugin that is not a <c>name@marketplace</c> id at user scope, or at local scope with its folder.
     /// </exception>
     public static InstallState Deserialize(string json)
     {
         ArgumentNullException.ThrowIfNull(json);
 
         StateFileDocument? document;
+        int version;
         try
         {
             using var parsed = JsonDocument.Parse(json, DocumentOptions);
-            CheckSchema(parsed.RootElement);
+            version = CheckSchema(parsed.RootElement);
             document = parsed.RootElement.Deserialize(StateFileJsonContext.Default.StateFileDocument);
         }
         catch (JsonException ex)
@@ -76,10 +84,14 @@ public static class StateFileFormat
             throw new StateFileException($"The state file is not valid JSON: {ex.Message}", ex);
         }
 
-        return ToState(document!);
+        var state = ToState(document!);
+        return version == OldestReadableSchemaVersion || document!.ChannelSwitch is null
+            ? state
+            : state with { Switch = document.ChannelSwitch.ToChannelSwitch() };
     }
 
-    private static void CheckSchema(JsonElement root)
+    /// <summary>Returns the schema version, which must be one this code reads.</summary>
+    private static int CheckSchema(JsonElement root)
     {
         if (root.ValueKind != JsonValueKind.Object)
         {
@@ -91,27 +103,33 @@ public static class StateFileFormat
             throw new StateFileException($"The state file has no 'schema' version; expected {SchemaVersion}.");
         }
 
-        if (schema.ValueKind != JsonValueKind.Number || schema.GetRawText() != SchemaVersion.ToString(CultureInfo.InvariantCulture))
+        for (var version = OldestReadableSchemaVersion; version <= SchemaVersion; version++)
         {
-            throw new StateFileException(
-                $"The state file has schema version {schema.GetRawText()}; this version of nexer-ai reads only schema {SchemaVersion}.");
+            if (schema.ValueKind == JsonValueKind.Number && schema.GetRawText() == version.ToString(CultureInfo.InvariantCulture))
+            {
+                return version;
+            }
+        }
+
+        throw new StateFileException(
+            $"The state file has schema version {schema.GetRawText()}; this version of nexer-ai reads only schema {OldestReadableSchemaVersion} to {SchemaVersion}.");
+    }
+
+    private static Channel ParseChannel(string name, string what)
+    {
+        try
+        {
+            return Channel.Parse(name);
+        }
+        catch (ArgumentException ex)
+        {
+            throw new StateFileException($"The state file names an unknown {what} '{name}'.", ex);
         }
     }
 
     private static InstallState ToState(StateFileDocument document)
     {
-        Channel? channel = null;
-        if (document.Channel is not null)
-        {
-            try
-            {
-                channel = Channel.Parse(document.Channel);
-            }
-            catch (ArgumentException ex)
-            {
-                throw new StateFileException($"The state file names an unknown channel '{document.Channel}'.", ex);
-            }
-        }
+        var channel = document.Channel is null ? null : ParseChannel(document.Channel, "channel");
 
         Role? role = null;
         if (document.Role is not null)
@@ -152,6 +170,71 @@ public static class StateFileFormat
         public IDictionary<string, string?>? Installed { get; set; }
 
         public IDictionary<string, ProjectDocument?>? Projects { get; set; }
+
+        public ChannelSwitchDocument? ChannelSwitch { get; set; }
+    }
+
+    internal sealed class ChannelSwitchDocument
+    {
+        public string? From { get; set; }
+
+        public string? To { get; set; }
+
+        public IList<PluginLocationDocument?>? PersonDisabled { get; set; }
+
+        public static ChannelSwitchDocument Create(ChannelSwitch pending) => new()
+        {
+            From = pending.From.Name,
+            To = pending.To.Name,
+            PersonDisabled = [.. pending.PersonDisabled.Select(PluginLocationDocument.Create)],
+        };
+
+        public ChannelSwitch ToChannelSwitch()
+        {
+            if (From is null || To is null || From == To)
+            {
+                throw new StateFileException("The state file has a channel switch without two different channels 'from' and 'to'.");
+            }
+
+            var disabled = (PersonDisabled ?? []).Select(location => location?.ToPluginLocation()
+                ?? throw new StateFileException("The state file has a channel switch with a null disabled plugin."));
+            return new ChannelSwitch(ParseChannel(From, "channel"), ParseChannel(To, "channel"), Array.AsReadOnly([.. disabled]));
+        }
+    }
+
+    internal sealed class PluginLocationDocument
+    {
+        public string? Id { get; set; }
+
+        public string? Scope { get; set; }
+
+        public string? Folder { get; set; }
+
+        public static PluginLocationDocument? Create(PluginLocation location) => new()
+        {
+            Id = location.Id,
+            Scope = location.Scope == PluginScope.User ? "user" : "local",
+            Folder = location.Folder,
+        };
+
+        /// <summary>A <c>name@marketplace</c> id at <c>user</c> scope without a folder, or at <c>local</c> scope with one.</summary>
+        public PluginLocation ToPluginLocation()
+        {
+            var at = Id?.LastIndexOf('@') ?? -1;
+            PluginScope? scope = (Scope, Folder) switch
+            {
+                ("user", null) => PluginScope.User,
+                ("local", { Length: > 0 }) => PluginScope.Local,
+                _ => null,
+            };
+            if (at <= 0 || at == Id!.Length - 1 || scope is null)
+            {
+                throw new StateFileException(
+                    "The state file has a channel switch with a disabled plugin that is not a name@marketplace id at user scope, or at local scope with its folder.");
+            }
+
+            return new PluginLocation(Id[..at], Id[(at + 1)..], scope.Value, Folder);
+        }
     }
 
     internal sealed class ProjectDocument
