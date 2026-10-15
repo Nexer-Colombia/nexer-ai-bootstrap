@@ -159,6 +159,15 @@ public sealed class ProcessRunnerTests : IDisposable
     }
 
     [Fact]
+    public async Task RunAsync_writes_the_standard_input_then_closes_it()
+    {
+        var result = await runner.RunAsync(
+            "findstr.exe", ["^"], folder.Path, TestContext.Current.CancellationToken, standardInput: "{\"k\":\"v\"}");
+
+        Assert.Equal(new ProcessResult(0, "{\"k\":\"v\"}\r\n", string.Empty), result);
+    }
+
+    [Fact]
     public async Task RunAsync_kills_the_program_and_throws_when_cancelled()
     {
         using var cancel = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);

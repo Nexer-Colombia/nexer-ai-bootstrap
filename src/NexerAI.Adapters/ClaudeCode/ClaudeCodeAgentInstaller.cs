@@ -1,4 +1,6 @@
 using System.ComponentModel;
+using System.Text;
+using System.Text.Json;
 using NexerAI.Adapters.Processes;
 using NexerAI.Core.ClaudeCode;
 using NexerAI.Core.Domain;
@@ -155,8 +157,13 @@ public sealed class ClaudeCodeAgentInstaller : IAgentInstaller
     /// Runs <c>claude plugin install &lt;name&gt;@&lt;marketplace&gt; --scope &lt;scope&gt; --json</c> with one
     /// <c>--config key=value</c> per configuration value, ordered by key: the values are on the command line, so they
     /// must not be secrets (https://code.claude.com/docs/en/plugins/cli-reference#plugin-install). A plugin already
-    /// installed at that scope is a success. The planner never asks for a disabled one, which this would enable again.
+    /// installed at that scope is a success; since <c>install</c> then ignores <c>--config</c> (no <c>configApplied</c> in
+    /// its result), the values are saved with <c>claude plugin configure &lt;id&gt; --values-stdin --json</c>, a JSON
+    /// object on standard input, never on the command line
+    /// (https://code.claude.com/docs/en/plugins/cli-reference#plugin-configure, Claude Code 2.1.285 or later).
+    /// The planner never asks for a disabled plugin, which this would enable again.
     /// </remarks>
+    /// <exception cref="ArgumentException">A configuration key is empty or holds <c>=</c> or whitespace. The value is never quoted.</exception>
     /// <exception cref="AgentStateException">
     /// <c>claude</c> cannot be run, the result is <c>failed</c>, a configuration value was not applied, the command
     /// exits with another code than 0, or it prints no result line. The message names the plugin and the failure
@@ -165,6 +172,15 @@ public sealed class ClaudeCodeAgentInstaller : IAgentInstaller
     public async Task InstallPluginAsync(PluginInstallRequest request, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(request);
+        foreach (var key in request.Config.Keys)
+        {
+            if (key.Length == 0 || key.Contains('=', StringComparison.Ordinal) || key.Any(char.IsWhiteSpace))
+            {
+                throw new ArgumentException("A plugin configuration key must not be empty or contain '=' or whitespace.", nameof(request));
+            }
+        }
+
+        ct.ThrowIfCancellationRequested();
 
         var id = $"{request.Name}@{request.Marketplace}";
         List<string> arguments = ["plugin", "install", id, "--scope", ScopeName(request.Scope), "--json"];
@@ -191,9 +207,47 @@ public sealed class ClaudeCodeAgentInstaller : IAgentInstaller
             throw new AgentStateException($"The output of 'claude plugin install {id} --json' has no result line; this version of nexer-ai does not recognize it.");
         }
 
+        if (request.Config.Count == 0)
+        {
+            return;
+        }
+
         if (outcome.ConfigApplied == false)
         {
             throw new AgentStateException($"Claude Code installed the plugin {id} but did not apply its configuration values; 'claude plugin configure {id}' lists its options.");
+        }
+
+        if (outcome.ConfigApplied is null)
+        {
+            // Already installed: install left its options alone.
+            await ConfigurePluginAsync(id, request.Config, ct).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Runs <c>claude plugin configure &lt;id&gt; --values-stdin --json</c> with the values as a JSON object on standard
+    /// input. The error names the plugin and the exit code, never a value.
+    /// </summary>
+    private async Task ConfigurePluginAsync(string id, IReadOnlyDictionary<string, string> config, CancellationToken ct)
+    {
+        using var buffer = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(buffer))
+        {
+            writer.WriteStartObject();
+            foreach (var (key, value) in config.OrderBy(c => c.Key, StringComparer.Ordinal))
+            {
+                writer.WriteString(key, value);
+            }
+
+            writer.WriteEndObject();
+        }
+
+        var result = await RunClaudeAsync(["plugin", "configure", id, "--values-stdin", "--json"], ct, Encoding.UTF8.GetString(buffer.ToArray()))
+            .ConfigureAwait(false);
+        if (result.ExitCode != 0)
+        {
+            throw new AgentStateException(
+                $"The plugin {id} is installed but its options were not applied: 'claude plugin configure {id} --values-stdin' exited with code {result.ExitCode}.");
         }
     }
 
@@ -202,13 +256,13 @@ public sealed class ClaudeCodeAgentInstaller : IAgentInstaller
     /// that exact folder, and MCP servers at local scope to its repository root (design 4.4).
     /// </summary>
     /// <exception cref="AgentStateException"><c>claude</c> is not on <c>PATH</c>, cannot be started or cannot be run safely.</exception>
-    private async Task<ProcessResult> RunClaudeAsync(IReadOnlyList<string> arguments, CancellationToken ct)
+    private async Task<ProcessResult> RunClaudeAsync(IReadOnlyList<string> arguments, CancellationToken ct, string? standardInput = null)
     {
         var claude = FindClaude() ?? throw new AgentStateException(
             $@"Claude Code was not found: no claude.exe or claude.cmd in the folders on PATH. Install it (the native installer puts claude.exe in %USERPROFILE%\.local\bin, see {SetupPage}), open a new terminal and try again.");
         try
         {
-            return await processRunner.RunAsync(claude, arguments, workingDirectory, ct).ConfigureAwait(false);
+            return await processRunner.RunAsync(claude, arguments, workingDirectory, ct, standardInput).ConfigureAwait(false);
         }
         catch (Win32Exception ex)
         {

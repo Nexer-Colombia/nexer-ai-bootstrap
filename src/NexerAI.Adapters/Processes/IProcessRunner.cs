@@ -14,12 +14,17 @@ public interface IProcessRunner
     /// <param name="arguments">Each argument as one item, quoted by the runner.</param>
     /// <param name="workingDirectory">An absolute folder.</param>
     /// <param name="ct">Cancels the wait and kills the process tree.</param>
+    /// <param name="standardInput">
+    /// Text written to the program's standard input as UTF-8 without a byte order mark, then closed; <see langword="null"/>
+    /// for none. How to pass values that must stay off the command line.
+    /// </param>
     /// <exception cref="System.ComponentModel.Win32Exception">
     /// The program cannot be started; <see cref="System.ComponentModel.Win32Exception.NativeErrorCode"/> tells why,
     /// for example <see cref="ProcessRunner.ErrorFileNotFound"/> or <see cref="ProcessRunner.ErrorDirectory"/>.
     /// </exception>
     /// <exception cref="ArgumentException">A batch file whose path or arguments <c>cmd.exe</c> would interpret.</exception>
-    Task<ProcessResult> RunAsync(string fileName, IReadOnlyList<string> arguments, string workingDirectory, CancellationToken ct);
+    Task<ProcessResult> RunAsync(
+        string fileName, IReadOnlyList<string> arguments, string workingDirectory, CancellationToken ct, string? standardInput = null);
 }
 
 /// <summary>How a program ended: its exit code and its standard output and error, read as UTF-8.</summary>

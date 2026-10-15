@@ -228,6 +228,85 @@ public sealed class ClaudeCodeAgentInstallerTests : IDisposable
         Assert.DoesNotContain("ghp_", error.ToString(), StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task InstallPluginAsync_does_not_fail_on_configApplied_false_when_no_config_was_passed()
+    {
+        temp.WriteFile(@"bin\claude.exe");
+        var runner = new FakeProcessRunner { Result = new(0, InstallResult("ok", ""","configApplied":false"""), string.Empty) };
+
+        await Installer(runner).InstallPluginAsync(Request("nexer-core", PluginScope.User), TestContext.Current.CancellationToken);
+
+        Assert.Single(runner.Runs);
+    }
+
+    [Fact]
+    public async Task InstallPluginAsync_saves_the_config_of_an_installed_plugin_through_stdin_not_the_command_line()
+    {
+        // An installed plugin prints no configApplied, so install ignored --config: plugin configure --values-stdin applies it
+        // (https://code.claude.com/docs/en/plugins/cli-reference#plugin-configure) without the values reaching the command line.
+        temp.WriteFile(@"bin\claude.exe");
+        var runner = new FakeProcessRunner();
+        runner.Results.Enqueue(new(0, InstallResult("ok", ""","installedVersion":"1.0.0" """), string.Empty));
+        runner.Results.Enqueue(new(0, "{\"saved\":[\"api_url\",\"region\"]}", string.Empty));
+        var config = new Dictionary<string, string> { ["region"] = "eu", ["api_url"] = "https://example.invalid/a" };
+
+        await Installer(runner).InstallPluginAsync(Request("nexer-core", PluginScope.User, config), TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, runner.Runs.Count);
+        Assert.Equal(["plugin", "configure", "nexer-core@nexer", "--values-stdin", "--json"], runner.Runs[1].Arguments);
+        Assert.Null(runner.Inputs[0]);
+        Assert.Equal("""{"api_url":"https://example.invalid/a","region":"eu"}""", runner.Inputs[1]);
+    }
+
+    [Fact]
+    public async Task InstallPluginAsync_names_the_plugin_when_saving_the_options_of_an_installed_plugin_fails()
+    {
+        temp.WriteFile(@"bin\claude.exe");
+        var runner = new FakeProcessRunner();
+        runner.Results.Enqueue(new(0, InstallResult("ok"), string.Empty));
+        runner.Results.Enqueue(new(1, "Failed to save configuration: ghp_secret", "ghp_secret-err"));
+        var config = new Dictionary<string, string> { ["token"] = "ghp_secret" };
+
+        var error = await Assert.ThrowsAsync<AgentStateException>(
+            () => Installer(runner).InstallPluginAsync(Request("nexer-core", PluginScope.User, config), TestContext.Current.CancellationToken));
+
+        Assert.Contains("nexer-core@nexer", error.Message, StringComparison.Ordinal);
+        Assert.Contains("not applied", error.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("ghp_", error.ToString(), StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("a=b")]
+    [InlineData("a b")]
+    [InlineData("a	b")]
+    public async Task InstallPluginAsync_rejects_a_config_key_that_is_empty_or_has_an_equals_sign_or_whitespace(string key)
+    {
+        temp.WriteFile(@"bin\claude.exe");
+        var runner = new FakeProcessRunner();
+        var config = new Dictionary<string, string> { [key] = "ghp_secret" };
+
+        var error = await Assert.ThrowsAsync<ArgumentException>(
+            () => Installer(runner).InstallPluginAsync(Request("nexer-core", PluginScope.User, config), TestContext.Current.CancellationToken));
+
+        Assert.DoesNotContain("ghp_", error.ToString(), StringComparison.Ordinal);
+        Assert.Empty(runner.Runs);
+    }
+
+    [Fact]
+    public async Task InstallPluginAsync_stops_when_already_cancelled()
+    {
+        temp.WriteFile(@"bin\claude.exe");
+        var runner = new FakeProcessRunner();
+        using var cancel = new CancellationTokenSource();
+        await cancel.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => Installer(runner).InstallPluginAsync(Request("nexer-core", PluginScope.User), cancel.Token));
+
+        Assert.Empty(runner.Runs);
+    }
+
     [Theory]
     [InlineData(1, "Invalid scope: ghp_secret")]
     [InlineData(1, """{"command":"install","outcome":"ok","message":"ghp_secret"}""")]

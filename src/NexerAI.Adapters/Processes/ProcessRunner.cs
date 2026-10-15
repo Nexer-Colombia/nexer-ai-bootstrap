@@ -43,7 +43,8 @@ public sealed class ProcessRunner : IProcessRunner
     private static readonly UTF8Encoding Utf8 = new(encoderShouldEmitUTF8Identifier: false);
 
     /// <inheritdoc />
-    public async Task<ProcessResult> RunAsync(string fileName, IReadOnlyList<string> arguments, string workingDirectory, CancellationToken ct)
+    public async Task<ProcessResult> RunAsync(
+        string fileName, IReadOnlyList<string> arguments, string workingDirectory, CancellationToken ct, string? standardInput = null)
     {
         ArgumentNullException.ThrowIfNull(fileName);
         ArgumentNullException.ThrowIfNull(arguments);
@@ -59,6 +60,7 @@ public sealed class ProcessRunner : IProcessRunner
             UseShellExecute = false,
             CreateNoWindow = true,
             RedirectStandardInput = true,
+            StandardInputEncoding = Utf8,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             StandardOutputEncoding = Utf8,
@@ -70,7 +72,26 @@ public sealed class ProcessRunner : IProcessRunner
         }
 
         using var process = Process.Start(startInfo)!;
-        process.StandardInput.Close(); // Nothing to answer: a prompt reads end of input instead of waiting.
+        if (standardInput is not null)
+        {
+            // A program that exits without reading its input closes the pipe: that is not an error here.
+            try
+            {
+                await process.StandardInput.WriteAsync(standardInput.AsMemory(), CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (IOException)
+            {
+            }
+        }
+
+        try
+        {
+            process.StandardInput.Close(); // Nothing more to answer: a prompt reads end of input instead of waiting.
+        }
+        catch (IOException)
+        {
+        }
+
         var output = process.StandardOutput.ReadToEndAsync(CancellationToken.None);
         var error = process.StandardError.ReadToEndAsync(CancellationToken.None);
         try
