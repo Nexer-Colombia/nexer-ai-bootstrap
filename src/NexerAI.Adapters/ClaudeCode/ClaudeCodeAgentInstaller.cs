@@ -8,8 +8,8 @@ namespace NexerAI.Adapters.ClaudeCode;
 
 /// <summary>
 /// The Claude Code adapter of <see cref="IAgentInstaller"/> for one working directory (design 4.4). Plugins come from
-/// <c>claude plugin list --json</c>; MCP servers from <c>.claude.json</c>, read without starting them. Installing
-/// and registering come in the next work unit.
+/// <c>claude plugin list --json</c>; MCP servers from <c>.claude.json</c>, read without starting them. Plugins are
+/// installed with <c>claude plugin install</c>; registering MCP servers comes in the next work unit.
 /// </summary>
 public sealed class ClaudeCodeAgentInstaller : IAgentInstaller
 {
@@ -73,26 +73,7 @@ public sealed class ClaudeCodeAgentInstaller : IAgentInstaller
     /// <exception cref="AgentStateException"><c>claude</c> is not on <c>PATH</c>, cannot be started, fails, or prints output that is not recognized.</exception>
     public async Task<IReadOnlyList<InstalledPlugin>> GetInstalledPluginsAsync(CancellationToken ct)
     {
-        var claude = FindClaude() ?? throw new AgentStateException(
-            $@"Claude Code was not found: no claude.exe or claude.cmd in the folders on PATH. Install it (the native installer puts claude.exe in %USERPROFILE%\.local\bin, see {SetupPage}), open a new terminal and try again.");
-        ProcessResult result;
-        try
-        {
-            result = await processRunner.RunAsync(claude, ["plugin", "list", "--json"], workingDirectory, ct).ConfigureAwait(false);
-        }
-        catch (Win32Exception ex)
-        {
-            throw new AgentStateException(ex.NativeErrorCode switch
-            {
-                ProcessRunner.ErrorDirectory => $"Claude Code cannot be started: the working directory '{workingDirectory}' does not exist.",
-                ProcessRunner.ErrorFileNotFound or ProcessRunner.ErrorPathNotFound => $"Claude Code cannot be started: '{claude}' no longer exists. Install it again (see {SetupPage}).",
-                _ => $"Claude Code at '{claude}' cannot be started (Windows error {ex.NativeErrorCode}: {ex.Message}).",
-            }, ex);
-        }
-        catch (ArgumentException ex)
-        {
-            throw new AgentStateException($"Claude Code at '{claude}' cannot be run safely: {ex.Message}", ex);
-        }
+        var result = await RunClaudeAsync(["plugin", "list", "--json"], ct).ConfigureAwait(false);
 
         // Its output is not passed on: it can quote settings.
         return result.ExitCode == 0
@@ -115,6 +96,88 @@ public sealed class ClaudeCodeAgentInstaller : IAgentInstaller
             ?? throw new AgentStateException($"Claude Code's configuration file '{configFile}' cannot be read.");
         return Task.FromResult(ClaudeConfig.ReadMcpServers(json, ClaudeConfig.ProjectFolder(fileSystem, workingDirectory)));
     }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// Runs <c>claude plugin install &lt;name&gt;@&lt;marketplace&gt; --scope &lt;scope&gt; --json</c> with one
+    /// <c>--config key=value</c> per configuration value, ordered by key: the values are on the command line, so they
+    /// must not be secrets (https://code.claude.com/docs/en/plugins/cli-reference#plugin-install). A plugin already
+    /// installed at that scope is a success. The planner never asks for a disabled one, which this would enable again.
+    /// </remarks>
+    /// <exception cref="AgentStateException">
+    /// <c>claude</c> cannot be run, the result is <c>failed</c>, a configuration value was not applied, the command
+    /// exits with another code than 0, or it prints no result line. The message names the plugin and the failure
+    /// code, never the output, which can quote configuration values.
+    /// </exception>
+    public async Task InstallPluginAsync(PluginInstallRequest request, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var id = $"{request.Name}@{request.Marketplace}";
+        List<string> arguments = ["plugin", "install", id, "--scope", ScopeName(request.Scope), "--json"];
+        foreach (var (key, value) in request.Config.OrderBy(c => c.Key, StringComparer.Ordinal))
+        {
+            arguments.AddRange(["--config", $"{key}={value}"]);
+        }
+
+        var result = await RunClaudeAsync(arguments, ct).ConfigureAwait(false);
+        var outcome = ClaudePluginResult.Parse(result.StandardOutput);
+        if (outcome is { Succeeded: false })
+        {
+            var code = outcome.FailureCode is { } failureCode ? $" (failure code {failureCode})" : string.Empty;
+            throw new AgentStateException($"Claude Code could not install the plugin {id}{code}.");
+        }
+
+        if (result.ExitCode != 0)
+        {
+            throw new AgentStateException($"'claude plugin install {id}' exited with code {result.ExitCode}.");
+        }
+
+        if (outcome is null)
+        {
+            throw new AgentStateException($"The output of 'claude plugin install {id} --json' has no result line; this version of nexer-ai does not recognize it.");
+        }
+
+        if (outcome.ConfigApplied == false)
+        {
+            throw new AgentStateException($"Claude Code installed the plugin {id} but did not apply its configuration values; 'claude plugin configure {id}' lists its options.");
+        }
+    }
+
+    /// <summary>
+    /// Runs <c>claude</c> with <paramref name="arguments"/> in the working directory: plugins at local scope belong to
+    /// that exact folder, and MCP servers at local scope to its repository root (design 4.4).
+    /// </summary>
+    /// <exception cref="AgentStateException"><c>claude</c> is not on <c>PATH</c>, cannot be started or cannot be run safely.</exception>
+    private async Task<ProcessResult> RunClaudeAsync(IReadOnlyList<string> arguments, CancellationToken ct)
+    {
+        var claude = FindClaude() ?? throw new AgentStateException(
+            $@"Claude Code was not found: no claude.exe or claude.cmd in the folders on PATH. Install it (the native installer puts claude.exe in %USERPROFILE%\.local\bin, see {SetupPage}), open a new terminal and try again.");
+        try
+        {
+            return await processRunner.RunAsync(claude, arguments, workingDirectory, ct).ConfigureAwait(false);
+        }
+        catch (Win32Exception ex)
+        {
+            throw new AgentStateException(ex.NativeErrorCode switch
+            {
+                ProcessRunner.ErrorDirectory => $"Claude Code cannot be started: the working directory '{workingDirectory}' does not exist.",
+                ProcessRunner.ErrorFileNotFound or ProcessRunner.ErrorPathNotFound => $"Claude Code cannot be started: '{claude}' no longer exists. Install it again (see {SetupPage}).",
+                _ => $"Claude Code at '{claude}' cannot be started (Windows error {ex.NativeErrorCode}: {ex.Message}).",
+            }, ex);
+        }
+        catch (ArgumentException ex)
+        {
+            throw new AgentStateException($"Claude Code at '{claude}' cannot be run safely: {ex.Message}", ex);
+        }
+    }
+
+    private static string ScopeName(PluginScope scope) => scope switch
+    {
+        PluginScope.User => "user",
+        PluginScope.Local => "local",
+        _ => throw new ArgumentOutOfRangeException(nameof(scope), scope, "Undefined scope."),
+    };
 
     /// <summary>
     /// The first <see cref="ClaudeFileNames"/> match in the folders of <see cref="searchPath"/>, folder by folder like
@@ -143,10 +206,6 @@ public sealed class ClaudeCodeAgentInstaller : IAgentInstaller
 
         return null;
     }
-
-    /// <inheritdoc />
-    public Task InstallPluginAsync(PluginInstallRequest request, CancellationToken ct) =>
-        throw new NotImplementedException("Installing plugins with Claude Code comes in a later work unit.");
 
     /// <inheritdoc />
     public Task AddMcpServerAsync(McpServerRegistration registration, CancellationToken ct) =>
