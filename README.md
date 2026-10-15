@@ -111,10 +111,10 @@ Every `claude` command runs in the adapter's working directory, which `nexer-ai 
 
 ## Prompts
 
-`ConsolePrompter` (`src/NexerAI.Adapters/Prompts`) implements `IPrompter` at the console. Questions go to standard error, so standard output keeps a command's results.
+`ConsolePrompter` (`src/NexerAI.Adapters/Prompts`) implements `IPrompter` at the console. Questions go to standard error, so standard output keeps a command's results; if only standard error is redirected (`nexer-ai install 2>log.txt`) they go to standard output, and if both are redirected the person cannot see them, so it throws `PromptUnavailableException`.
 
-- `Choose` lists numbered choices and accepts a number or the choice itself, ignoring case. `Confirm` reads `y`, `yes`, `n` or `no`, and an empty answer is no. Any other answer asks again; end of input (Ctrl+Z then Enter) throws `OperationCanceledException`, so a closed input never loops.
-- `ReadSecret` echoes nothing, not even a `*` per character, so a screen share shows neither the secret nor its length. Backspace, Enter and pasting work; arrows and other control keys are ignored; Escape or Ctrl+C throws `OperationCanceledException`. Keys left after Enter, such as the rest of a pasted clipboard, are discarded so the next question cannot echo them. The characters are kept in an array that is cleared afterwards; the returned string cannot be wiped.
+- `Choose` lists numbered choices and accepts a number or the choice itself, ignoring case. `Confirm` reads `y`, `yes`, `n` or `no`, and an empty answer is no. Any other answer asks again; end of input (Ctrl+Z then Enter) throws `OperationCanceledException`, so a closed input never loops. Ctrl+C at one of these two questions ends the process like in any console program.
+- `ReadSecret` echoes nothing, not even a `*` per character, so a screen share shows neither the secret nor its length. Backspace, Enter and pasting work; arrows and other control keys are ignored; Escape or Ctrl+C throws `OperationCanceledException`. Ctrl+C is intercepted here, so the buffer is cleared and the caller can clean up. Keys typed ahead are discarded before every question, and those left after Enter, such as the rest of a pasted clipboard, are discarded too (at most 4096, best effort), so the next question cannot echo them or take a stale newline as its answer. The characters are kept in an array that is cleared afterwards; the returned string cannot be wiped.
 - Redirected standard input, or a terminal that cannot read keys, throws `PromptUnavailableException` before anything is asked. Scripts and CI will pass answers as options with `--non-interactive`, through another `IPrompter`; nothing is read from a pipe. No message repeats an answer.
 
 ## Task key

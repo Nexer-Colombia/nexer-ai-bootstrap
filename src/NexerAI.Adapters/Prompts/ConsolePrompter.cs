@@ -6,8 +6,11 @@ namespace NexerAI.Adapters.Prompts;
 /// <summary>
 /// Asks the person at the console. Every question needs an interactive console: with redirected input it throws
 /// <see cref="PromptUnavailableException"/> before writing anything, because answers for scripts and CI come from
-/// the options of <c>--non-interactive</c>, not from a pipe. An invalid answer asks again; end of input (Ctrl+Z
-/// then Enter) throws <see cref="OperationCanceledException"/>. Answers are never repeated in messages.
+/// the options of <c>--non-interactive</c>, not from a pipe. Questions go to standard error, or to standard output when
+/// only standard error is redirected; with both redirected the person cannot see them and it throws too. An invalid
+/// answer asks again; end of input (Ctrl+Z then Enter) throws <see cref="OperationCanceledException"/>, and Ctrl+C at
+/// <see cref="Choose"/> or <see cref="Confirm"/> ends the process like in any console program. Keys typed ahead are
+/// discarded before each question. Answers are never repeated in messages.
 /// </summary>
 public sealed class ConsolePrompter : IPrompter
 {
@@ -94,8 +97,10 @@ public sealed class ConsolePrompter : IPrompter
     /// <remarks>
     /// Nothing is echoed, not even a <c>*</c> per character, so a screen share or recording shows neither the secret
     /// nor its length. Backspace removes the last character (a surrogate pair as one), Enter ends the input, Escape
-    /// or Ctrl+C cancels; arrows, function keys and other control keys are ignored. Keys left after Enter or a
-    /// cancel, such as the rest of a pasted clipboard, are discarded so the next question cannot echo them. An
+    /// or Ctrl+C cancels; arrows, function keys and other control keys are ignored. Keys waiting before the
+    /// question, and those left after Enter or a cancel (the rest of a pasted clipboard), are discarded, at most a few
+    /// thousand and without ever changing the outcome, so the next question cannot echo them or take a stale newline
+    /// as its answer. An
     /// empty or blank answer asks again. The characters are collected in an array that is cleared afterwards; the
     /// returned string cannot be wiped.
     /// </remarks>
