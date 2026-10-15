@@ -21,6 +21,8 @@ public sealed class ClaudeCodeAgentInstallerTests : IDisposable
 
     private string ConfigFile => Path.Combine(temp.Path, ".claude.json");
 
+    private string SettingsFile => Path.Combine(temp.Path, ".claude", "settings.json");
+
     private string WorkingDirectory => Path.Combine(temp.Path, "repo", "sub");
 
     private string Bin => Path.Combine(temp.Path, "bin");
@@ -582,8 +584,8 @@ public sealed class ClaudeCodeAgentInstallerTests : IDisposable
     [Fact]
     public void Constructor_rejects_relative_paths()
     {
-        Assert.Throws<ArgumentException>(() => new ClaudeCodeAgentInstaller(new FakeProcessRunner(), new LocalFileSystem(), ".claude.json", WorkingDirectory, Bin));
-        Assert.Throws<ArgumentException>(() => new ClaudeCodeAgentInstaller(new FakeProcessRunner(), new LocalFileSystem(), ConfigFile, "repo", Bin));
+        Assert.Throws<ArgumentException>(() => new ClaudeCodeAgentInstaller(new FakeProcessRunner(), new LocalFileSystem(), ".claude.json", SettingsFile, WorkingDirectory, Bin));
+        Assert.Throws<ArgumentException>(() => new ClaudeCodeAgentInstaller(new FakeProcessRunner(), new LocalFileSystem(), ConfigFile, SettingsFile, "repo", Bin));
     }
 
     [Theory]
@@ -592,7 +594,7 @@ public sealed class ClaudeCodeAgentInstallerTests : IDisposable
     [InlineData("//server")]
     public void Constructor_rejects_a_working_directory_without_a_UNC_share(string workingDirectory)
     {
-        Assert.Throws<ArgumentException>(() => new ClaudeCodeAgentInstaller(new FakeProcessRunner(), new LocalFileSystem(), ConfigFile, workingDirectory, Bin));
+        Assert.Throws<ArgumentException>(() => new ClaudeCodeAgentInstaller(new FakeProcessRunner(), new LocalFileSystem(), ConfigFile, SettingsFile, workingDirectory, Bin));
     }
 
     /// <summary>
@@ -691,5 +693,5 @@ public sealed class ClaudeCodeAgentInstallerTests : IDisposable
         new(name, "nexer", scope, config ?? []);
 
     private ClaudeCodeAgentInstaller Installer(IProcessRunner runner, string? searchPath = null) =>
-        new(runner, new LocalFileSystem(), ConfigFile, WorkingDirectory, searchPath ?? Bin);
+        new(runner, new LocalFileSystem(), ConfigFile, SettingsFile, WorkingDirectory, searchPath ?? Bin);
 }

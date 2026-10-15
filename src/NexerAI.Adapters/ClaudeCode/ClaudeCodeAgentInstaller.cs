@@ -11,7 +11,8 @@ namespace NexerAI.Adapters.ClaudeCode;
 /// <summary>
 /// The Claude Code adapter of <see cref="IAgentInstaller"/> for one working directory (design 4.4). Plugins come from
 /// <c>claude plugin list --json</c>; MCP servers from <c>.claude.json</c>, read without starting them. Changes go
-/// through <c>claude plugin install</c> and <c>claude mcp add</c> and <c>remove</c>.
+/// through <c>claude plugin install</c>, <c>claude plugin marketplace add</c> and <c>claude mcp add</c> and <c>remove</c>;
+/// a marketplace's auto-update is written into the user <c>settings.json</c>, which no command sets.
 /// </summary>
 public sealed class ClaudeCodeAgentInstaller : IAgentInstaller
 {
@@ -32,6 +33,8 @@ public sealed class ClaudeCodeAgentInstaller : IAgentInstaller
 
     private readonly string configFile;
 
+    private readonly ClaudeSettingsFile settingsFile;
+
     private readonly string workingDirectory;
 
     private readonly string? searchPath;
@@ -40,10 +43,11 @@ public sealed class ClaudeCodeAgentInstaller : IAgentInstaller
     /// <param name="processRunner">Runs <c>claude</c>.</param>
     /// <param name="fileSystem">Reads <paramref name="configFile"/> and the git files that locate the repository root.</param>
     /// <param name="configFile">Absolute path of <c>.claude.json</c>, usually <see cref="DefaultConfigFile"/>.</param>
+    /// <param name="settingsFile">Absolute path of the user <c>settings.json</c>, usually <see cref="DefaultSettingsFile"/>.</param>
     /// <param name="workingDirectory">Absolute folder the commands act on: a drive path or a UNC path with a share.</param>
     /// <param name="searchPath">Where <c>claude</c> is looked for, usually <see cref="DefaultSearchPath"/>.</param>
     public ClaudeCodeAgentInstaller(
-        IProcessRunner processRunner, IReadOnlyFileSystem fileSystem, string configFile, string workingDirectory, string? searchPath)
+        IProcessRunner processRunner, IReadOnlyFileSystem fileSystem, string configFile, string settingsFile, string workingDirectory, string? searchPath)
     {
         ArgumentNullException.ThrowIfNull(processRunner);
         ArgumentNullException.ThrowIfNull(fileSystem);
@@ -62,6 +66,7 @@ public sealed class ClaudeCodeAgentInstaller : IAgentInstaller
         this.processRunner = processRunner;
         this.fileSystem = fileSystem;
         this.configFile = configFile;
+        this.settingsFile = new ClaudeSettingsFile(settingsFile);
         this.workingDirectory = workingDirectory;
         this.searchPath = searchPath;
     }
@@ -71,6 +76,10 @@ public sealed class ClaudeCodeAgentInstaller : IAgentInstaller
 
     /// <summary>The <c>.claude.json</c> of the current user, honoring <c>CLAUDE_CONFIG_DIR</c> (see <see cref="ClaudeConfig.FilePath"/>).</summary>
     public static string DefaultConfigFile => ClaudeConfig.FilePath(
+        Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR"), Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
+
+    /// <summary>The user <c>settings.json</c>, honoring <c>CLAUDE_CONFIG_DIR</c> (see <see cref="ClaudeSettings.FilePath"/>).</summary>
+    public static string DefaultSettingsFile => ClaudeSettings.FilePath(
         Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR"), Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
 
     /// <inheritdoc />
@@ -83,6 +92,80 @@ public sealed class ClaudeCodeAgentInstaller : IAgentInstaller
         return result.ExitCode == 0
             ? ClaudePluginList.Parse(result.StandardOutput, workingDirectory)
             : throw new AgentStateException($"'claude plugin list --json' exited with code {result.ExitCode}.");
+    }
+
+    /// <inheritdoc />
+    /// <remarks>Runs <c>claude plugin marketplace list --json</c> (https://code.claude.com/docs/en/plugins/cli-reference#plugin-marketplace-list).</remarks>
+    /// <exception cref="AgentStateException"><c>claude</c> is not on <c>PATH</c>, cannot be started, fails, or prints output that is not recognized.</exception>
+    public async Task<IReadOnlyList<RegisteredMarketplace>> GetMarketplacesAsync(CancellationToken ct)
+    {
+        var result = await RunClaudeAsync(["plugin", "marketplace", "list", "--json"], ct).ConfigureAwait(false);
+        return result.ExitCode == 0
+            ? ClaudeMarketplaceList.Parse(result.StandardOutput)
+            : throw new AgentStateException($"'claude plugin marketplace list --json' exited with code {result.ExitCode}.");
+    }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// Runs <c>claude plugin marketplace add &lt;owner/repo&gt; --scope user --json</c>, the <c>github</c> form without a
+    /// ref or path (https://code.claude.com/docs/en/plugins/cli-reference#plugin-marketplace-add, Claude Code 2.1.287 or
+    /// later for <c>--json</c>). It clones the repository and declares the marketplace in the user settings.
+    /// </remarks>
+    /// <exception cref="AgentStateException">
+    /// <c>claude</c> cannot be run, the result is <c>failed</c>, the command exits with another code than 0, it prints no
+    /// result line, or the catalog was added under another name than the channel's. The message names the repository and
+    /// the failure code, never the output.
+    /// </exception>
+    public async Task AddMarketplaceAsync(Channel channel, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(channel);
+
+        var result = await RunClaudeAsync(["plugin", "marketplace", "add", channel.Repository, "--scope", "user", "--json"], ct).ConfigureAwait(false);
+        var outcome = ClaudePluginResult.Parse(result.StandardOutput);
+        if (outcome is { Succeeded: false })
+        {
+            var code = outcome.FailureCode is { } failureCode ? $" (failure code {failureCode})" : string.Empty;
+            throw new AgentStateException($"Claude Code could not add the marketplace {channel.Repository}{code}.");
+        }
+
+        if (result.ExitCode != 0)
+        {
+            throw new AgentStateException($"'claude plugin marketplace add {channel.Repository}' exited with code {result.ExitCode}.");
+        }
+
+        if (outcome is null)
+        {
+            throw new AgentStateException(
+                $"The output of 'claude plugin marketplace add {channel.Repository} --json' has no result line; this version of nexer-ai does not recognize it.");
+        }
+
+        if (outcome.Marketplace is { } name && !string.Equals(name, channel.Name, StringComparison.Ordinal))
+        {
+            throw new AgentStateException(
+                $"The marketplace {channel.Repository} was added under another name than '{channel.Name}'; its catalog is not the {channel.Name} channel's.");
+        }
+    }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// Writes <c>"autoUpdate": true</c> into the channel's <c>extraKnownMarketplaces</c> entry of the user
+    /// <c>settings.json</c> with <see cref="ClaudeSettings.WithMarketplaceAutoUpdate"/>: no command sets it, and
+    /// <c>marketplace add</c> drops it (design 4.1). Runs nothing; the file is not written when the entry already has it.
+    /// </remarks>
+    /// <exception cref="AgentStateException">The file cannot be read, written or understood; it is then left as it is, and the message names its path.</exception>
+    public async Task EnableMarketplaceAutoUpdateAsync(Channel channel, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(channel);
+
+        try
+        {
+            await settingsFile.UpdateAsync(json => ClaudeSettings.WithMarketplaceAutoUpdate(json, channel), ct).ConfigureAwait(false);
+        }
+        catch (AgentStateException ex) when (!ex.Message.Contains(settingsFile.FilePath, StringComparison.Ordinal))
+        {
+            // ClaudeSettings names the file but not where it is.
+            throw new AgentStateException($"{ex.Message} File: '{settingsFile.FilePath}'.", ex);
+        }
     }
 
     /// <inheritdoc />
