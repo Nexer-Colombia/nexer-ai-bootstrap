@@ -71,13 +71,17 @@ public static class StateFileFormat
     {
         ArgumentNullException.ThrowIfNull(json);
 
-        StateFileDocument? document;
+        StateFileDocumentV1? document;
         int version;
         try
         {
             using var parsed = JsonDocument.Parse(json, DocumentOptions);
             version = CheckSchema(parsed.RootElement);
-            document = parsed.RootElement.Deserialize(StateFileJsonContext.Default.StateFileDocument);
+
+            // Schema 1 never had a switch: it is read with a type that has no such property, so a malformed one is ignored too.
+            document = version == OldestReadableSchemaVersion
+                ? parsed.RootElement.Deserialize(StateFileJsonContext.Default.StateFileDocumentV1)
+                : parsed.RootElement.Deserialize(StateFileJsonContext.Default.StateFileDocument);
         }
         catch (JsonException ex)
         {
@@ -85,9 +89,9 @@ public static class StateFileFormat
         }
 
         var state = ToState(document!);
-        return version == OldestReadableSchemaVersion || document!.ChannelSwitch is null
-            ? state
-            : state with { Switch = document.ChannelSwitch.ToChannelSwitch() };
+        return document is StateFileDocument { ChannelSwitch: { } pending }
+            ? state with { Switch = pending.ToChannelSwitch() }
+            : state;
     }
 
     /// <summary>Returns the schema version, which must be one this code reads.</summary>
@@ -127,7 +131,7 @@ public static class StateFileFormat
         }
     }
 
-    private static InstallState ToState(StateFileDocument document)
+    private static InstallState ToState(StateFileDocumentV1 document)
     {
         var channel = document.Channel is null ? null : ParseChannel(document.Channel, "channel");
 
@@ -159,7 +163,7 @@ public static class StateFileFormat
         return new InstallState(channel, role, installed.AsReadOnly(), projects.AsReadOnly());
     }
 
-    internal sealed class StateFileDocument
+    internal class StateFileDocumentV1
     {
         public int? Schema { get; set; }
 
@@ -170,7 +174,12 @@ public static class StateFileFormat
         public IDictionary<string, string?>? Installed { get; set; }
 
         public IDictionary<string, ProjectDocument?>? Projects { get; set; }
+    }
 
+    internal sealed class StateFileDocument : StateFileDocumentV1
+    {
+        // Written last, after the inherited properties.
+        [JsonPropertyOrder(1)]
         public ChannelSwitchDocument? ChannelSwitch { get; set; }
     }
 
@@ -275,4 +284,5 @@ public static class StateFileFormat
     NewLine = "\n",
     AllowDuplicateProperties = false)]
 [JsonSerializable(typeof(StateFileFormat.StateFileDocument))]
+[JsonSerializable(typeof(StateFileFormat.StateFileDocumentV1))]
 internal sealed partial class StateFileJsonContext : JsonSerializerContext;

@@ -125,6 +125,18 @@ public sealed class StateFileFormatTests
         Assert.Null(StateFileFormat.Deserialize("""{ "schema": 1, "channelSwitch": { "from": "x" } }""").Switch);
     }
 
+    [Theory]
+    [InlineData("""{ "schema": 1, "channel": "nexer", "channelSwitch": "garbage" }""")]
+    [InlineData("""{ "schema": 1, "channel": "nexer", "channelSwitch": [1, 2] }""")]
+    [InlineData("""{ "schema": 1, "channel": "nexer", "channelSwitch": { "from": 7, "personDisabled": "x" } }""")]
+    public void Deserialize_ignores_a_wrong_shaped_channelSwitch_in_a_schema_1_file(string json)
+    {
+        var state = StateFileFormat.Deserialize(json);
+
+        Assert.Null(state.Switch);
+        Assert.Same(Channel.Stable, state.Channel);
+    }
+
     [Fact]
     public void Deserialize_reads_the_design_example_into_domain_types()
     {
