@@ -98,6 +98,71 @@ public static class ClaudeConfig
     }
 
     /// <summary>
+    /// Whether the MCP server <paramref name="registration"/> names, at its scope, runs exactly its command and
+    /// arguments, compared ordinally: <c>allowedMcpServers</c> entries match the command and every argument exactly
+    /// (https://code.claude.com/docs/en/managed-mcp#how-servercommand-entries-match). Read like
+    /// <see cref="ReadMcpServers"/>; when several keys name <paramref name="projectFolder"/>, each entry of that name
+    /// must match. A missing <c>args</c> means none. <see langword="false"/> when no such server exists, when it is
+    /// remote (<c>url</c>), or when its <c>command</c> or <c>args</c> has another shape. <c>env</c> is never read.
+    /// </summary>
+    /// <exception cref="AgentStateException">The text is not valid JSON.</exception>
+    public static bool RunsCommand(string json, string projectFolder, McpServerRegistration registration)
+    {
+        ArgumentNullException.ThrowIfNull(json);
+        ArgumentNullException.ThrowIfNull(projectFolder);
+        ArgumentNullException.ThrowIfNull(registration);
+
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            var found = false;
+            foreach (var (key, owner) in McpServerOwners(document.RootElement))
+            {
+                var scope = key is null ? PluginScope.User : PluginScope.Local;
+                if (scope != registration.Scope
+                    || (key is not null && !WindowsPath.SameFolder(key, projectFolder))
+                    || owner.ValueKind != JsonValueKind.Object
+                    || !owner.TryGetProperty("mcpServers", out var entries)
+                    || entries.ValueKind != JsonValueKind.Object
+                    || !entries.TryGetProperty(registration.Name, out var server))
+                {
+                    continue;
+                }
+
+                if (!HasCommandLine(server, registration.Command, registration.Arguments))
+                {
+                    return false;
+                }
+
+                found = true;
+            }
+
+            return found;
+        }
+        catch (JsonException ex)
+        {
+            throw Unrecognized($"is not valid JSON{JsonErrors.Where(ex)}");
+        }
+    }
+
+    private static bool HasCommandLine(JsonElement server, string command, IReadOnlyList<string> arguments)
+    {
+        if (!HasString(server, "command") || server.GetProperty("command").GetString() != command)
+        {
+            return false;
+        }
+
+        if (!server.TryGetProperty("args", out var args))
+        {
+            return arguments.Count == 0;
+        }
+
+        return args.ValueKind == JsonValueKind.Array
+            && args.GetArrayLength() == arguments.Count
+            && args.EnumerateArray().Select((arg, i) => arg.ValueKind == JsonValueKind.String && arg.GetString() == arguments[i]).All(same => same);
+    }
+
+    /// <summary>
     /// The values that can hold an <c>mcpServers</c> object: the root (key <see langword="null"/>, user scope), then
     /// each value of <c>projects</c> with its key (local scope), in document order and whatever their kind.
     /// Nothing when the root is not an object.

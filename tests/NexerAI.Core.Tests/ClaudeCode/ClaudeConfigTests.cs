@@ -106,6 +106,63 @@ public sealed class ClaudeConfigTests
     }
 
     [Theory]
+    [InlineData("nexer-jira", PluginScope.Local, "cmd", new[] { "/c", "echo", "local" })]
+    [InlineData("nexer-userecho", PluginScope.User, "cmd", new[] { "/c", "echo", "hi" })]
+    public void RunsCommand_is_true_for_the_same_command_and_arguments_at_the_same_scope(
+        string name, PluginScope scope, string command, string[] arguments)
+    {
+        Assert.True(ClaudeConfig.RunsCommand(Sample("claude-json-2.1.300.json"), "C:/t/ap", new(name, scope, command, arguments)));
+    }
+
+    [Theory]
+    [InlineData("nexer-jira", PluginScope.Local, "CMD", new[] { "/c", "echo", "local" })]
+    [InlineData("nexer-jira", PluginScope.Local, "cmd", new[] { "/c", "echo", "LOCAL" })]
+    [InlineData("nexer-jira", PluginScope.Local, "cmd", new[] { "/c", "echo" })]
+    [InlineData("nexer-jira", PluginScope.Local, "cmd", new[] { "/c", "echo", "local", "more" })]
+    [InlineData("nexer-jira", PluginScope.User, "cmd", new[] { "/c", "echo", "local" })]
+    [InlineData("nexer-userecho", PluginScope.Local, "cmd", new[] { "/c", "echo", "hi" })]
+    [InlineData("nexer-other", PluginScope.Local, "cmd", new[] { "/c", "echo", "other" })]
+    [InlineData("nexer-remote", PluginScope.Local, "https://example.invalid/mcp", new string[0])]
+    [InlineData("nexer-missing", PluginScope.Local, "cmd", new string[0])]
+    public void RunsCommand_is_false_for_another_command_line_scope_or_project_or_no_such_stdio_server(
+        string name, PluginScope scope, string command, string[] arguments)
+    {
+        Assert.False(ClaudeConfig.RunsCommand(Sample("claude-json-2.1.300.json"), "C:/t/ap", new(name, scope, command, arguments)));
+    }
+
+    [Theory]
+    [InlineData("""{"mcpServers": {"s": {"command": "x"}}}""", true)]
+    [InlineData("""{"mcpServers": {"s": {"command": "x", "args": null}}}""", false)]
+    [InlineData("""{"mcpServers": {"s": {"command": "x", "args": [1]}}}""", false)]
+    [InlineData("""{"mcpServers": {"s": {"command": "x", "args": "a"}}}""", false)]
+    [InlineData("""{"mcpServers": null, "projects": null}""", false)]
+    [InlineData("""{"projects": {"C:/t/ap": {"mcpServers": {"s": {"command": "x"}}}}}""", false)]
+    public void RunsCommand_reads_missing_arguments_as_none_and_other_shapes_as_another_command(string json, bool expected)
+    {
+        Assert.Equal(expected, ClaudeConfig.RunsCommand(json, "C:/t/ap", new("s", PluginScope.User, "x", [])));
+    }
+
+    [Fact]
+    public void RunsCommand_is_false_when_any_key_naming_the_project_holds_another_command()
+    {
+        var json = """
+            {"projects": {"C:/t/ap": {"mcpServers": {"s": {"command": "x", "args": []}}},
+                          "c:\\T\\AP": {"mcpServers": {"s": {"command": "y", "args": []}}}}}
+            """;
+
+        Assert.False(ClaudeConfig.RunsCommand(json, "C:/t/ap", new("s", PluginScope.Local, "x", [])));
+    }
+
+    [Fact]
+    public void RunsCommand_rejects_invalid_JSON_without_quoting_it()
+    {
+        var error = Assert.Throws<AgentStateException>(
+            () => ClaudeConfig.RunsCommand("""{"mcpServers": {"s": {"env": {"T": "ghp_secret"}""", "C:/t/ap", new("s", PluginScope.User, "x", [])));
+
+        Assert.DoesNotContain("ghp_", error.ToString(), StringComparison.Ordinal);
+    }
+
+    [Theory]
     [InlineData(@"C:\t\ap", "C:/t/ap")]
     [InlineData(@"C:\t\ap\sub\deeper", "C:/t/ap")]
     [InlineData(@"C:\t\wt\sub", "C:/t/wt")]

@@ -9,7 +9,8 @@ namespace NexerAI.Adapters.Processes;
 /// A batch file (<c>.cmd</c>, <c>.bat</c>) is run by <c>cmd.exe</c>, which Windows starts implicitly and which
 /// re-reads the command line with its own rules (<c>&amp;</c>, <c>|</c>, <c>%</c>...); <see cref="Process"/> does not
 /// escape for it, so a batch file is refused unless its path and arguments contain only characters
-/// <c>cmd.exe</c> leaves alone.
+/// <c>cmd.exe</c> leaves alone. A space is allowed in an argument: <see cref="Process"/> then wraps the argument in
+/// quotes, inside which <c>cmd.exe</c> reads everything literally except <c>%</c>, <c>!</c> and <c>"</c>, all refused.
 /// </summary>
 public sealed class ProcessRunner : IProcessRunner
 {
@@ -22,9 +23,13 @@ public sealed class ProcessRunner : IProcessRunner
     /// <summary>Windows error <c>ERROR_DIRECTORY</c>: the working directory does not exist or is not a folder.</summary>
     public const int ErrorDirectory = 267;
 
-    /// <summary>What a batch file argument may hold: letters, digits and <c>@._:/\=+,-</c>.</summary>
+    /// <summary>
+    /// What a batch file argument may hold: letters, digits, <c>@._:/\=+,-</c> and the space. A space makes
+    /// <see cref="Process"/> quote the argument, so a per-user path such as <c>C:/Users/Ana Maria/...</c> stays one
+    /// argument; none of the other characters needs quoting.
+    /// </summary>
     private static readonly SearchValues<char> BatchArgumentCharacters =
-        SearchValues.Create("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@._:/\\=+,-");
+        SearchValues.Create("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@._:/\\=+,- ");
 
     /// <summary>What <c>cmd.exe</c> expands even inside quotes, so a batch file path may not hold it.</summary>
     private static readonly SearchValues<char> BatchPathExpansions = SearchValues.Create("%!\"");
