@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using NexerAI.Core.ClaudeCode;
 
 namespace NexerAI.Core.Doctor;
 
@@ -52,25 +53,11 @@ public static partial class McpSecretScanner
     private static List<McpSecretFinding> FindAll(JsonElement root)
     {
         var findings = new List<McpSecretFinding>();
-        if (root.ValueKind != JsonValueKind.Object)
+        foreach (var (key, owner) in ClaudeConfig.McpServerOwners(root))
         {
-            return findings;
-        }
-
-        if (root.TryGetProperty("mcpServers", out var userServers))
-        {
-            AddServers(findings, new McpScope.User(), userServers);
-        }
-
-        if (root.TryGetProperty("projects", out var projects) && projects.ValueKind == JsonValueKind.Object)
-        {
-            foreach (var project in projects.EnumerateObject())
+            if (owner.ValueKind == JsonValueKind.Object && owner.TryGetProperty("mcpServers", out var servers))
             {
-                if (project.Value.ValueKind == JsonValueKind.Object
-                    && project.Value.TryGetProperty("mcpServers", out var projectServers))
-                {
-                    AddServers(findings, new McpScope.Project(project.Name), projectServers);
-                }
+                AddServers(findings, key is null ? new McpScope.User() : new McpScope.Project(key), servers);
             }
         }
 

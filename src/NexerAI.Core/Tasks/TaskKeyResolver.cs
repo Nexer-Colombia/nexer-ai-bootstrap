@@ -27,27 +27,20 @@ public sealed class TaskKeyResolver(IReadOnlyFileSystem fileSystem)
     {
         ArgumentNullException.ThrowIfNull(workingDirectory);
 
-        for (var directory = WindowsPath.Parse(workingDirectory); directory is not null; directory = directory.Parent)
+        var start = WindowsPath.Parse(workingDirectory);
+        if (start is null || GitRepository.FindRoot(fileSystem, start) is not { } root)
         {
-            var dotGit = directory.Combine(".git");
-            if (fileSystem.DirectoryExists(dotGit.ToString()))
-            {
-                if (!fileSystem.FileExists(dotGit.Combine("HEAD").ToString()))
-                {
-                    continue; // Like git, a .git folder without a HEAD is not a repository.
-                }
-
-                return ReadKey(directory, dotGit);
-            }
-
-            if (fileSystem.FileExists(dotGit.ToString()))
-            {
-                var gitDirectory = ReadGitdir(directory, dotGit);
-                return gitDirectory is null ? null : ReadKey(directory, gitDirectory);
-            }
+            return null;
         }
 
-        return null;
+        var dotGit = root.Combine(".git");
+        if (fileSystem.DirectoryExists(dotGit.ToString()))
+        {
+            return ReadKey(root, dotGit);
+        }
+
+        var gitDirectory = ReadGitdir(root, dotGit);
+        return gitDirectory is null ? null : ReadKey(root, gitDirectory);
     }
 
     /// <summary>Reads the branch from <c>HEAD</c>; only a symbolic ref under <c>refs/heads/</c> is a branch.</summary>
