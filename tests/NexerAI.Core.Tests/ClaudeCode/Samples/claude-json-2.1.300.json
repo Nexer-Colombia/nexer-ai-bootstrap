@@ -1,0 +1,56 @@
+{
+  "firstStartVersion": "2.1.300",
+  "migrationVersion": 14,
+  "seenNotifications": {},
+  "mcpServers": {
+    "nexer-userecho": {
+      "type": "stdio",
+      "command": "cmd",
+      "args": [
+        "/c",
+        "echo",
+        "hi"
+      ],
+      "env": {}
+    }
+  },
+  "projects": {
+    "C:/t/ap": {
+      "allowedTools": [],
+      "mcpServers": {
+        "nexer-jira": {
+          "type": "stdio",
+          "command": "cmd",
+          "args": [
+            "/c",
+            "echo",
+            "local"
+          ],
+          "env": {}
+        },
+        "nexer-remote": {
+          "type": "http",
+          "url": "https://example.invalid/mcp"
+        }
+      },
+      "enabledMcpjsonServers": [],
+      "hasTrustDialogAccepted": false
+    },
+    "C:/t/bp": {
+      "allowedTools": [],
+      "mcpServers": {
+        "nexer-other": {
+          "type": "stdio",
+          "command": "cmd",
+          "args": [
+            "/c",
+            "echo",
+            "other"
+          ],
+          "env": {}
+        }
+      },
+      "hasTrustDialogAccepted": false
+    }
+  }
+}
