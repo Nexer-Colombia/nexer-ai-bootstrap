@@ -96,13 +96,35 @@ public sealed class FileStateStoreTests : IDisposable
     [Fact]
     public async Task Concurrent_updates_from_two_instances_keep_every_change()
     {
+        // Each update starts the next one, on the other instance, while it holds the lock, so every update after
+        // the first finds the lock taken, waits, and must read the state its predecessor wrote. Starting them all
+        // at once made the test race the lock's retry schedule against its timeout instead.
+        const int Count = 20;
         var other = new FileStateStore(statePath);
+        var updates = new Task<InstallState>[Count];
 
-        await Task.WhenAll(Enumerable.Range(0, 40).Select(i => Task.Run(
-            () => (i % 2 == 0 ? store : other).UpdateAsync(s => s.WithProject($"github.com/acme/repo-{i}", Website), Ct), Ct)));
+        Task<InstallState> Start(int i) =>
+            (i % 2 == 0 ? store : other).UpdateAsync(
+                s =>
+                {
+                    if (i + 1 < Count)
+                    {
+                        updates[i + 1] = Start(i + 1);
+                        Assert.False(updates[i + 1].IsCompleted);
+                    }
+
+                    return s.WithProject($"github.com/acme/repo-{i}", Website);
+                },
+                Ct);
+
+        updates[0] = Start(0);
+        for (var i = 0; i < Count; i++)
+        {
+            await updates[i];
+        }
 
         var state = await store.ReadAsync(Ct);
-        Assert.Equal(40, state.Projects.Count);
+        Assert.Equal(Count, state.Projects.Count);
         AssertOnlyStateAndLockFiles();
     }
 
