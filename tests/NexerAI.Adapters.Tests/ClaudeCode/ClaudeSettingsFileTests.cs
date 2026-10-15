@@ -240,6 +240,62 @@ public sealed class ClaudeSettingsFileTests : IDisposable
     }
 
     [Fact]
+    public async Task UpdateAsync_fails_at_once_with_an_access_denied_message_when_permissions_deny_writing_the_file()
+    {
+        // R1: a permanent denial (an ACL) is not a busy file: no retries, and the message must not advise trying again.
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        temp.WriteFile(@".claude\settings.json", "a");
+        var info = new FileInfo(FilePath);
+        var folder = new DirectoryInfo(Path.GetDirectoryName(FilePath)!);
+        var user = System.Security.Principal.WindowsIdentity.GetCurrent().User!;
+        var denyFile = new System.Security.AccessControl.FileSystemAccessRule(
+            user,
+            System.Security.AccessControl.FileSystemRights.WriteData | System.Security.AccessControl.FileSystemRights.Delete,
+            System.Security.AccessControl.AccessControlType.Deny);
+        var denyChildren = new System.Security.AccessControl.FileSystemAccessRule(
+            user,
+            System.Security.AccessControl.FileSystemRights.DeleteSubdirectoriesAndFiles,
+            System.Security.AccessControl.AccessControlType.Deny);
+        var fileSecurity = info.GetAccessControl();
+        fileSecurity.AddAccessRule(denyFile);
+        info.SetAccessControl(fileSecurity);
+        var folderSecurity = folder.GetAccessControl();
+        folderSecurity.AddAccessRule(denyChildren);
+        folder.SetAccessControl(folderSecurity);
+        try
+        {
+            var calls = 0;
+            var error = await Assert.ThrowsAsync<AgentStateException>(
+                () => new ClaudeSettingsFile(FilePath).UpdateAsync(
+                    text =>
+                    {
+                        calls++;
+                        return text + "+";
+                    },
+                    TestContext.Current.CancellationToken));
+
+            Assert.Equal(1, calls);
+            Assert.Contains("access", error.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("denied", error.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("Try again", error.Message, StringComparison.Ordinal);
+            Assert.Contains(FilePath, error.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            var restoreFolder = folder.GetAccessControl();
+            restoreFolder.RemoveAccessRule(denyChildren);
+            folder.SetAccessControl(restoreFolder);
+            var restoreFile = info.GetAccessControl();
+            restoreFile.RemoveAccessRule(denyFile);
+            info.SetAccessControl(restoreFile);
+        }
+    }
+
+    [Fact]
     public async Task UpdateAsync_writes_through_a_link_to_the_file_it_points_at_and_keeps_the_link()
     {
         // The seam stands in for a symbolic link, which needs privileges a test run may not have.

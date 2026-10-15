@@ -166,7 +166,12 @@ public sealed class ClaudeSettingsFile
                 return false;
             }
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (UnauthorizedAccessException ex)
+        {
+            throw new AgentStateException(
+                $"Claude Code's settings file '{FilePath}' cannot be written: access was denied (read-only file or folder permissions); nexer-ai left it untouched.", ex);
+        }
+        catch (IOException ex)
         {
             throw new AgentStateException($"Claude Code's settings file '{FilePath}' cannot be written: {ex.Message}", ex);
         }
@@ -176,15 +181,36 @@ public sealed class ClaudeSettingsFile
         }
     }
 
-    /// <summary>An access error on a file that exists and is not read-only is a busy file; on a read-only one it is a refusal to report.</summary>
+    /// <summary>
+    /// Whether a refused move is a busy file to retry. An access error is classified by probing the file for writing: a
+    /// sharing violation there means another program has it open (retry), while a denial means a permanent refusal such
+    /// as a permission rule or a read-only file, reported at once.
+    /// </summary>
     private static bool IsSharingViolation(Exception ex, string path) =>
         ex switch
         {
             FileNotFoundException or DirectoryNotFoundException => false,
             IOException => File.Exists(path),
-            UnauthorizedAccessException => File.Exists(path) && !File.GetAttributes(path).HasFlag(FileAttributes.ReadOnly),
+            UnauthorizedAccessException => File.Exists(path) && !File.GetAttributes(path).HasFlag(FileAttributes.ReadOnly) && !WriteIsDenied(path),
             _ => false,
         };
+
+    private static bool WriteIsDenied(string path)
+    {
+        try
+        {
+            using var probe = new FileStream(path, FileMode.Open, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete);
+            return false;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return true;
+        }
+        catch (IOException)
+        {
+            return false; // A sharing violation: the file is in use.
+        }
+    }
 
     private static void TryDelete(string path)
     {
