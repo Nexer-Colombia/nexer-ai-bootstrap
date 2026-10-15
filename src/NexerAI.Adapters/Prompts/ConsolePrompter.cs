@@ -11,6 +11,9 @@ namespace NexerAI.Adapters.Prompts;
 /// </summary>
 public sealed class ConsolePrompter : IPrompter
 {
+    /// <summary>The most keys one discard reads, so a stuck key repeat cannot hold a prompt forever.</summary>
+    internal const int MaxDiscardedKeys = 4096;
+
     private readonly IConsole console;
 
     /// <summary>Creates a prompter on the process console.</summary>
@@ -185,11 +188,22 @@ public sealed class ConsolePrompter : IPrompter
         }
     }
 
+    /// <summary>
+    /// Reads and drops the keys waiting right now, at most <see cref="MaxDiscardedKeys"/>. Best effort: a console that
+    /// cannot say whether a key is waiting must not change the outcome of a prompt that already has its answer.
+    /// </summary>
     private void DiscardPendingKeys()
     {
-        while (console.KeyAvailable)
+        try
         {
-            console.ReadKey();
+            for (var i = 0; i < MaxDiscardedKeys && console.KeyAvailable; i++)
+            {
+                console.ReadKey();
+            }
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or IOException)
+        {
+            // Nothing more can be discarded; the answer or the cancel stands.
         }
     }
 
