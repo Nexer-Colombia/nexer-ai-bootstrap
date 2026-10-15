@@ -148,21 +148,36 @@ public sealed class DpapiCredentialStoreTests : IDisposable
     }
 
     [Fact]
-    public async Task Get_waits_for_another_program_that_holds_the_file_briefly()
+    public void Get_waits_for_another_program_that_holds_the_file_briefly()
     {
         store.Set(Acme, Secret);
         var file = Assert.Single(Directory.GetFiles(folder));
-        var held = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.None);
-        var release = Task.Run(
-            async () =>
-            {
-                await Task.Delay(50);
-                await held.DisposeAsync();
-            },
-            TestContext.Current.CancellationToken);
+        using var held = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.None);
+        var waits = new List<TimeSpan>();
 
-        Assert.Equal(Secret, store.Get(Acme));
-        await release;
+        // The other program closes the file while Get waits after its first sharing violation; no timing involved.
+        var patient = new DpapiCredentialStore(folder, delay =>
+        {
+            waits.Add(delay);
+            held.Dispose();
+        });
+
+        Assert.Equal(Secret, patient.Get(Acme));
+        Assert.Equal([TimeSpan.FromMilliseconds(10)], waits);
+    }
+
+    [Fact]
+    public void Get_retries_a_file_another_program_keeps_open_until_the_waits_add_up_to_half_a_second()
+    {
+        store.Set(Acme, Secret);
+        var file = Assert.Single(Directory.GetFiles(folder));
+        using var held = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.None);
+        var waits = new List<TimeSpan>();
+        var patient = new DpapiCredentialStore(folder, waits.Add);
+
+        Assert.Throws<CredentialStoreException>(() => patient.Get(Acme));
+
+        Assert.Equal([10, 20, 40, 80, 160, 190], waits.Select(w => w.TotalMilliseconds));
     }
 
     [Fact]
