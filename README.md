@@ -69,13 +69,19 @@ The rules live in one table in the detector. A new signal is one entry there, ad
 
 ## Reading Claude Code's state
 
-`ClaudeCodeAgentInstaller` (`src/NexerAI.Adapters/ClaudeCode`) implements the read side of `IAgentInstaller` for one working directory, verified on Claude Code 2.1.300 (design 4.4). Install and MCP registration come in a later unit and throw `NotImplementedException` for now.
+`ClaudeCodeAgentInstaller` (`src/NexerAI.Adapters/ClaudeCode`) implements the read side of `IAgentInstaller` for one working directory, verified on Claude Code 2.1.300 (design 4.4). Registering MCP servers comes in a later unit and throws `NotImplementedException` for now.
 
 - Plugins: it runs `claude plugin list --json` in the working directory through `IProcessRunner` (`src/NexerAI.Adapters/Processes`; `claude.exe` from the native installer, found on `PATH`) and `ClaudePluginList` keeps user-scope plugins and the local-scope plugins whose `projectPath` is that exact folder: a local plugin installed in a subfolder does not apply at the repository root, nor the reverse. Other scopes and ids are skipped. `enabled` is kept, and a disabled plugin still counts as installed ([JSON output](https://code.claude.com/docs/en/plugins/cli-reference#json-output)).
 - MCP servers: `claude mcp list` and `get` start the servers to check them ([MCP](https://code.claude.com/docs/en/mcp)), so `ClaudeConfig` reads `.claude.json` instead (`$CLAUDE_CONFIG_DIR\.claude.json`, else `%USERPROFILE%\.claude.json`): the top-level `mcpServers` (user scope, observed) and `projects["<key>"].mcpServers` (local scope, documented). The key is the repository root with forward slashes, found like the task key, or the working directory outside a repository; keys match ignoring case and separators. Only names and scopes are read, never `env` or `headers`. A missing file means no servers.
 - Errors: a `claude` that cannot start or fails, or output or a file with a shape it does not recognize, raise `AgentStateException`, whose message never quotes the output or the file. `doctor` will show it as a warning.
 
 The parsers are tested against samples recorded with an isolated `CLAUDE_CONFIG_DIR` (`tests/NexerAI.Core.Tests/ClaudeCode/Samples`).
+
+## Changing Claude Code's state
+
+Every `claude` command runs in the adapter's working directory, which `nexer-ai project` sets to the repository root: a local-scope plugin belongs to that exact folder.
+
+- Plugins: `claude plugin install <name>@<marketplace> --scope <scope> --json`, plus one `--config key=value` per configuration value, ordered by key. Those values are on the command line, so `PluginInstallRequest.Config` holds non-secret values only; secrets will go through `claude plugin configure --values-stdin`. `ClaudePluginResult` reads the result line, the last line of stdout ([JSON result format](https://code.claude.com/docs/en/plugins/cli-reference#plugin-json-result)). Outcome `ok` is a success, including a plugin already installed at that scope. Outcome `failed`, another exit code than 0, no result line, or `configApplied: false` raise `AgentStateException`. `configApplied: false` is what Claude Code 2.1.300 reports, with outcome `ok` and exit code 0, for a `--config` key the plugin does not declare (observed, not documented). The message names the plugin and the `failureCode`, never the output.
 
 ## State file
 
