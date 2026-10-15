@@ -59,6 +59,47 @@ public static class ClaudePluginList
         }
     }
 
+    /// <summary>
+    /// Returns the <c>projectPath</c> of every local-scope entry, each folder once (compared ignoring case and
+    /// separators, the first spelling kept), in output order. Entries without an absolute <c>projectPath</c> are
+    /// skipped. Only the folders are read: <c>enabled</c> is the state in the folder the command ran in, not in the
+    /// entry's own folder (observed on 2.1.301), so each folder's plugins are listed from that folder.
+    /// </summary>
+    /// <param name="json">The standard output of the command.</param>
+    /// <exception cref="AgentStateException">The output is not valid JSON, not an array, or has an entry without a string <c>scope</c>.</exception>
+    public static IReadOnlyList<string> LocalFolders(string json)
+    {
+        ArgumentNullException.ThrowIfNull(json);
+
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            if (document.RootElement.ValueKind != JsonValueKind.Array)
+            {
+                throw Unrecognized("is not a JSON array");
+            }
+
+            var folders = new List<string>();
+            foreach (var entry in document.RootElement.EnumerateArray())
+            {
+                var scope = Text(entry, "scope") ?? throw Unrecognized("has an entry without a string scope");
+                if (scope == "local"
+                    && Text(entry, "projectPath") is { } path
+                    && WindowsPath.Parse(path) is not null
+                    && !folders.Exists(folder => WindowsPath.SameFolder(folder, path)))
+                {
+                    folders.Add(path);
+                }
+            }
+
+            return folders;
+        }
+        catch (JsonException ex)
+        {
+            throw Unrecognized($"is not valid JSON{JsonErrors.Where(ex)}");
+        }
+    }
+
     private static InstalledPlugin? Read(JsonElement entry, string workingDirectory)
     {
         PluginScope? pluginScope = Text(entry, "scope") switch

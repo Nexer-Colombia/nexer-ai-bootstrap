@@ -104,6 +104,44 @@ public sealed class ClaudePluginListTests
         Assert.DoesNotContain("secret", error.ToString(), StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void LocalFolders_lists_each_folder_with_local_plugins_once_in_output_order()
+    {
+        // Recorded on 2.1.301 from C:\t\pb: nexer-core@nexer at local scope in C:\t\pa (enabled there) and C:\t\pc
+        // (disabled there). Both report enabled false, the state in C:\t\pb, not in their own folder.
+        Assert.Equal([@"C:\t\pa", @"C:\t\pc"], ClaudePluginList.LocalFolders(Sample("plugin-list-folders-2.1.301.json")));
+        Assert.Equal([@"C:\t\ap\sub", @"C:\t\bp"], ClaudePluginList.LocalFolders(Sample("plugin-list-2.1.300.json")));
+    }
+
+    [Fact]
+    public void LocalFolders_merges_spellings_of_one_folder_and_skips_entries_without_an_absolute_project_path()
+    {
+        var folders = ClaudePluginList.LocalFolders("""
+            [
+              {"id": "a@m", "scope": "local", "projectPath": "C:\\t\\pa"},
+              {"id": "b@m", "scope": "local", "projectPath": "c:/T/PA/"},
+              {"id": "c@m", "scope": "local", "projectPath": "relative"},
+              {"id": "d@m", "scope": "local"},
+              {"id": "e@m", "scope": "project", "projectPath": "C:\\t\\pp"},
+              {"id": "f@m", "scope": "user"}
+            ]
+            """);
+
+        Assert.Equal([@"C:\t\pa"], folders);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("{}")]
+    [InlineData("[1]")]
+    [InlineData("""[{"id": "a@m"}]""")]
+    public void LocalFolders_rejects_output_it_does_not_recognize_with_a_typed_error(string json)
+    {
+        var error = Assert.Throws<AgentStateException>(() => ClaudePluginList.LocalFolders(json));
+
+        Assert.Contains("claude plugin list --json", error.Message, StringComparison.Ordinal);
+    }
+
     private static string Sample(string name) =>
         File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "ClaudeCode", "Samples", name));
 }
