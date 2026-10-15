@@ -8,8 +8,8 @@ namespace NexerAI.Adapters.ClaudeCode;
 
 /// <summary>
 /// The Claude Code adapter of <see cref="IAgentInstaller"/> for one working directory (design 4.4). Plugins come from
-/// <c>claude plugin list --json</c>; MCP servers from <c>.claude.json</c>, read without starting them. Plugins are
-/// installed with <c>claude plugin install</c>; registering MCP servers comes in the next work unit.
+/// <c>claude plugin list --json</c>; MCP servers from <c>.claude.json</c>, read without starting them. Changes go
+/// through <c>claude plugin install</c> and <c>claude mcp add</c> and <c>remove</c>.
 /// </summary>
 public sealed class ClaudeCodeAgentInstaller : IAgentInstaller
 {
@@ -87,14 +87,67 @@ public sealed class ClaudeCodeAgentInstaller : IAgentInstaller
     public Task<IReadOnlyList<InstalledMcpServer>> GetMcpServersAsync(CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
-        if (!fileSystem.FileExists(configFile))
+        return Task.FromResult(ReadConfig() is { } json
+            ? ClaudeConfig.ReadMcpServers(json, ClaudeConfig.ProjectFolder(fileSystem, workingDirectory))
+            : []);
+    }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// Idempotent. A server of that name and scope that already runs the same command and arguments is left alone;
+    /// one with another command line is removed with <c>claude mcp remove --scope &lt;scope&gt; &lt;name&gt;</c> first,
+    /// because <c>claude mcp add</c> refuses an existing name (observed on 2.1.300: exit code 1, nothing changed). Then
+    /// <c>claude mcp add --transport stdio --scope &lt;scope&gt; &lt;name&gt; -- &lt;command&gt; [args...]</c>
+    /// (https://code.claude.com/docs/en/mcp#option-3-add-a-local-stdio-server). Never <c>--env</c>: Claude Code
+    /// stores its values in plain text, so a secret reaches the server through the launcher instead (design 4.4).
+    /// </remarks>
+    /// <exception cref="AgentStateException">
+    /// <c>.claude.json</c> cannot be read or is not recognized, <c>claude</c> cannot be run, or a command exits with
+    /// another code than 0. The message never quotes the output, which repeats the command line.
+    /// </exception>
+    public async Task AddMcpServerAsync(McpServerRegistration registration, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(registration);
+        ct.ThrowIfCancellationRequested();
+
+        var scope = ScopeName(registration.Scope);
+        if (ReadConfig() is { } json)
         {
-            return Task.FromResult<IReadOnlyList<InstalledMcpServer>>([]);
+            var projectFolder = ClaudeConfig.ProjectFolder(fileSystem, workingDirectory);
+            if (ClaudeConfig.ReadMcpServers(json, projectFolder).Contains(new InstalledMcpServer(registration.Name, registration.Scope)))
+            {
+                if (ClaudeConfig.RunsCommand(json, projectFolder, registration))
+                {
+                    return;
+                }
+
+                await RunMcpCommandAsync("remove", [], scope, registration.Name, [], ct).ConfigureAwait(false);
+            }
         }
 
-        var json = fileSystem.ReadAllText(configFile)
-            ?? throw new AgentStateException($"Claude Code's configuration file '{configFile}' cannot be read.");
-        return Task.FromResult(ClaudeConfig.ReadMcpServers(json, ClaudeConfig.ProjectFolder(fileSystem, workingDirectory)));
+        await RunMcpCommandAsync(
+            "add", ["--transport", "stdio"], scope, registration.Name, ["--", registration.Command, .. registration.Arguments], ct).ConfigureAwait(false);
+    }
+
+    /// <summary>The text of <c>.claude.json</c>, or <see langword="null"/> when it does not exist yet: Claude Code creates it on first use.</summary>
+    private string? ReadConfig() =>
+        !fileSystem.FileExists(configFile)
+            ? null
+            : fileSystem.ReadAllText(configFile)
+                ?? throw new AgentStateException($"Claude Code's configuration file '{configFile}' cannot be read.");
+
+    /// <summary>
+    /// Runs <c>claude mcp &lt;subcommand&gt; [options] --scope &lt;scope&gt; &lt;name&gt; [rest]</c>; the error names
+    /// the subcommand, scope and server, never the rest of the command line.
+    /// </summary>
+    private async Task RunMcpCommandAsync(
+        string subcommand, IReadOnlyList<string> options, string scope, string name, IReadOnlyList<string> rest, CancellationToken ct)
+    {
+        var result = await RunClaudeAsync(["mcp", subcommand, .. options, "--scope", scope, name, .. rest], ct).ConfigureAwait(false);
+        if (result.ExitCode != 0)
+        {
+            throw new AgentStateException($"'claude mcp {subcommand} --scope {scope} {name}' exited with code {result.ExitCode}.");
+        }
     }
 
     /// <inheritdoc />
@@ -206,8 +259,4 @@ public sealed class ClaudeCodeAgentInstaller : IAgentInstaller
 
         return null;
     }
-
-    /// <inheritdoc />
-    public Task AddMcpServerAsync(McpServerRegistration registration, CancellationToken ct) =>
-        throw new NotImplementedException("Registering MCP servers with Claude Code comes in a later work unit.");
 }

@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Text.Json.Nodes;
 using NexerAI.Adapters.ClaudeCode;
 using NexerAI.Adapters.FileSystem;
 using NexerAI.Adapters.Processes;
@@ -11,6 +12,9 @@ namespace NexerAI.Adapters.Tests.ClaudeCode;
 /// <summary>Uses a fake process runner and a <c>.claude.json</c> in a temporary folder, never the machine's Claude Code.</summary>
 public sealed class ClaudeCodeAgentInstallerTests : IDisposable
 {
+    /// <summary>The launcher as <c>nexer-ai project</c> registers it: forward slashes, and a user folder with a space.</summary>
+    private const string LauncherPath = "C:/Users/Ana Maria/AppData/Local/nexer-ai/bin/nexer-ai.exe";
+
     private readonly TempDirectory temp = new();
 
     public void Dispose() => temp.Dispose();
@@ -265,6 +269,106 @@ public sealed class ClaudeCodeAgentInstallerTests : IDisposable
         Assert.Empty(runner.Runs);
     }
 
+    [Theory]
+    [InlineData(PluginScope.Local, "local")]
+    [InlineData(PluginScope.User, "user")]
+    public async Task AddMcpServerAsync_runs_claude_mcp_add_for_a_new_server(PluginScope scope, string scopeName)
+    {
+        var claude = temp.WriteFile(@"bin\claude.exe");
+        var runner = new FakeProcessRunner();
+
+        await Installer(runner).AddMcpServerAsync(Launcher("nexer-jira", scope), TestContext.Current.CancellationToken);
+
+        var run = Assert.Single(runner.Runs);
+        Assert.Equal((claude, WorkingDirectory), (run.FileName, run.WorkingDirectory));
+        Assert.Equal(
+            ["mcp", "add", "--transport", "stdio", "--scope", scopeName, "nexer-jira", "--", LauncherPath, "mcp-launch", "--type", "jira"],
+            run.Arguments);
+    }
+
+    [Fact]
+    public async Task AddMcpServerAsync_does_nothing_when_the_server_already_runs_the_same_command()
+    {
+        temp.WriteFile(@"bin\claude.exe");
+        WriteLocalServer("nexer-jira", LauncherPath, ["mcp-launch", "--type", "jira"]);
+        var runner = new FakeProcessRunner();
+
+        await Installer(runner).AddMcpServerAsync(Launcher("nexer-jira", PluginScope.Local), TestContext.Current.CancellationToken);
+
+        Assert.Empty(runner.Runs);
+    }
+
+    [Fact]
+    public async Task AddMcpServerAsync_removes_and_adds_again_a_server_with_another_command()
+    {
+        temp.WriteFile(@"bin\claude.exe");
+        WriteLocalServer("nexer-jira", "C:/old/nexer-ai.exe", ["mcp-launch", "--type", "jira"]);
+        var runner = new FakeProcessRunner();
+
+        await Installer(runner).AddMcpServerAsync(Launcher("nexer-jira", PluginScope.Local), TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, runner.Runs.Count);
+        Assert.Equal(["mcp", "remove", "--scope", "local", "nexer-jira"], runner.Runs[0].Arguments);
+        Assert.Equal("add", runner.Runs[1].Arguments[1]);
+        Assert.All(runner.Runs, run => Assert.Equal(WorkingDirectory, run.WorkingDirectory));
+    }
+
+    [Fact]
+    public async Task AddMcpServerAsync_adds_without_removing_when_the_name_exists_only_at_the_other_scope()
+    {
+        temp.WriteFile(@"bin\claude.exe");
+        File.WriteAllText(ConfigFile, """{ "mcpServers": { "nexer-jira": { "type": "stdio", "command": "x", "args": [] } } }""");
+        var runner = new FakeProcessRunner();
+
+        await Installer(runner).AddMcpServerAsync(Launcher("nexer-jira", PluginScope.Local), TestContext.Current.CancellationToken);
+
+        Assert.Equal("add", Assert.Single(runner.Runs).Arguments[1]);
+    }
+
+    [Fact]
+    public async Task AddMcpServerAsync_stops_when_the_old_server_cannot_be_removed()
+    {
+        temp.WriteFile(@"bin\claude.exe");
+        WriteLocalServer("nexer-jira", "C:/old/nexer-ai.exe", []);
+        var runner = new FakeProcessRunner { Result = new(1, string.Empty, "No MCP server named \"nexer-jira\" ghp_secret") };
+
+        var error = await Assert.ThrowsAsync<AgentStateException>(
+            () => Installer(runner).AddMcpServerAsync(Launcher("nexer-jira", PluginScope.Local), TestContext.Current.CancellationToken));
+
+        Assert.Contains("'claude mcp remove --scope local nexer-jira' exited with code 1", error.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("ghp_", error.ToString(), StringComparison.Ordinal);
+        Assert.Single(runner.Runs);
+    }
+
+    [Fact]
+    public async Task AddMcpServerAsync_reports_a_failed_add_without_its_output()
+    {
+        temp.WriteFile(@"bin\claude.exe");
+        var runner = new FakeProcessRunner
+        {
+            Results = new([new(1, "Added stdio MCP server with command: x ghp_secret-out", "ghp_secret-err")]),
+        };
+
+        var error = await Assert.ThrowsAsync<AgentStateException>(
+            () => Installer(runner).AddMcpServerAsync(Launcher("nexer-jira", PluginScope.Local), TestContext.Current.CancellationToken));
+
+        Assert.Contains("'claude mcp add --scope local nexer-jira' exited with code 1", error.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("ghp_", error.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AddMcpServerAsync_runs_nothing_when_the_config_file_is_not_recognized()
+    {
+        temp.WriteFile(@"bin\claude.exe");
+        File.WriteAllText(ConfigFile, "{\"mcpServers\": [");
+        var runner = new FakeProcessRunner();
+
+        await Assert.ThrowsAsync<AgentStateException>(
+            () => Installer(runner).AddMcpServerAsync(Launcher("nexer-jira", PluginScope.Local), TestContext.Current.CancellationToken));
+
+        Assert.Empty(runner.Runs);
+    }
+
     [Fact]
     public void Constructor_rejects_relative_paths()
     {
@@ -279,6 +383,36 @@ public sealed class ClaudeCodeAgentInstallerTests : IDisposable
     public void Constructor_rejects_a_working_directory_without_a_UNC_share(string workingDirectory)
     {
         Assert.Throws<ArgumentException>(() => new ClaudeCodeAgentInstaller(new FakeProcessRunner(), new LocalFileSystem(), ConfigFile, workingDirectory, Bin));
+    }
+
+    private static McpServerRegistration Launcher(string name, PluginScope scope) =>
+        new(name, scope, LauncherPath, ["mcp-launch", "--type", "jira"]);
+
+    /// <summary>Writes <c>.claude.json</c> with one local server of the repository root, as Claude Code 2.1.300 writes it.</summary>
+    private void WriteLocalServer(string name, string command, string[] arguments)
+    {
+        temp.WriteFile(@"repo\.git\HEAD", "ref: refs/heads/main\n");
+        var key = Path.Combine(temp.Path, "repo").Replace('\\', '/');
+        var json = new JsonObject
+        {
+            ["projects"] = new JsonObject
+            {
+                [key] = new JsonObject
+                {
+                    ["mcpServers"] = new JsonObject
+                    {
+                        [name] = new JsonObject
+                        {
+                            ["type"] = "stdio",
+                            ["command"] = command,
+                            ["args"] = new JsonArray([.. arguments.Select(a => JsonValue.Create(a))]),
+                            ["env"] = new JsonObject(),
+                        },
+                    },
+                },
+            },
+        };
+        File.WriteAllText(ConfigFile, json.ToJsonString());
     }
 
     /// <summary>A result line as Claude Code 2.1.300 prints it, with <paramref name="extra"/> fields appended.</summary>
