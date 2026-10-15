@@ -90,6 +90,74 @@ public sealed class ProcessRunnerTests : IDisposable
         Assert.False(File.Exists(Path.Combine(folder.Path, "ran.txt")));
     }
 
+    [Theory]
+    [InlineData("\"")]
+    [InlineData("!")]
+    [InlineData("^")]
+    [InlineData("<")]
+    [InlineData(">")]
+    [InlineData("a b !c")]
+    [InlineData("a \"b\" c")]
+    [InlineData("\uFF02")] // Fullwidth quotation mark: a best-fit codepage can map it to a quote.
+    [InlineData("\uFF05")] // Fullwidth percent sign.
+    [InlineData("\uFF3E")] // Fullwidth circumflex accent.
+    public async Task RunAsync_refuses_a_batch_file_argument_with_a_character_cmd_or_a_codepage_could_turn_into_syntax(string argument)
+    {
+        var path = Path.Combine(folder.Path, "tool.cmd");
+        File.WriteAllText(path, "@exit /b 0\r\n");
+
+        await Assert.ThrowsAsync<ArgumentException>(
+            () => runner.RunAsync(path, [argument], folder.Path, TestContext.Current.CancellationToken));
+    }
+
+    [Theory]
+    [InlineData("C:/Users/Mar\u00EDa/nexer-ai.exe")]
+    [InlineData("Mu\u00F1oz")]
+    [InlineData("Zo\u00EB")]
+    public async Task RunAsync_accepts_letters_and_digits_beyond_ASCII_in_a_batch_file_argument(string argument)
+    {
+        var path = Path.Combine(folder.Path, "tool.cmd");
+        File.WriteAllText(path, "@exit /b 0\r\n");
+
+        var result = await runner.RunAsync(path, [argument], folder.Path, TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
+    [InlineData("a&b")]
+    [InlineData("a|b")]
+    [InlineData("a<b")]
+    [InlineData("a>b")]
+    [InlineData("a^b")]
+    [InlineData("a%b")]
+    [InlineData("a!b")]
+    [InlineData("a\"b")]
+    public async Task RunAsync_refuses_a_batch_file_path_with_a_character_cmd_would_interpret(string folderName)
+    {
+        // Nothing is created: the refusal comes before the file is touched, and some of these are not valid file names.
+        var path = Path.Combine(folder.Path, folderName, "tool.cmd");
+
+        await Assert.ThrowsAsync<ArgumentException>(
+            () => runner.RunAsync(path, ["list"], folder.Path, TestContext.Current.CancellationToken));
+    }
+
+    [Theory]
+    [InlineData(@"\\server\share\repo")]
+    [InlineData("//server/share/repo")]
+    public async Task RunAsync_refuses_a_UNC_working_directory_for_a_batch_file(string workingDirectory)
+    {
+        // cmd.exe does not start in a UNC folder: it runs in the Windows folder instead, so a local-scope command
+        // would act on the wrong folder.
+        var path = Path.Combine(folder.Path, "tool.cmd");
+        File.WriteAllText(path, "@exit /b 0\r\n");
+
+        var error = await Assert.ThrowsAsync<ArgumentException>(
+            () => runner.RunAsync(path, ["list"], workingDirectory, TestContext.Current.CancellationToken));
+
+        Assert.Contains("UNC", error.Message, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task RunAsync_kills_the_program_and_throws_when_cancelled()
     {
