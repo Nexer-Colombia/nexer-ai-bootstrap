@@ -33,9 +33,17 @@ public sealed class DpapiCredentialStore : ICredentialStore
 
     private readonly string folder;
 
+    private readonly Action<TimeSpan> wait;
+
     /// <summary>Creates a store in <paramref name="folder"/>, usually <see cref="DefaultDirectory"/>; the folder is created on the first write.</summary>
     /// <param name="folder">Fully qualified path of the folder.</param>
     public DpapiCredentialStore(string folder)
+        : this(folder, Thread.Sleep)
+    {
+    }
+
+    /// <summary>Creates a store that calls <paramref name="wait"/> between read attempts, so tests control the waits.</summary>
+    internal DpapiCredentialStore(string folder, Action<TimeSpan> wait)
     {
         ArgumentNullException.ThrowIfNull(folder);
         if (!Path.IsPathFullyQualified(folder))
@@ -44,6 +52,7 @@ public sealed class DpapiCredentialStore : ICredentialStore
         }
 
         this.folder = folder;
+        this.wait = wait;
     }
 
     /// <summary>The folder of the current user: <c>%USERPROFILE%\.nexer-ai\credentials</c>.</summary>
@@ -173,7 +182,7 @@ public sealed class DpapiCredentialStore : ICredentialStore
     /// Reads the file, or returns <see langword="null"/> when it or its folder is missing. A sharing or lock
     /// violation is retried with a growing delay for up to <see cref="SharingTimeout"/>, like <c>FileStateStore</c>.
     /// </summary>
-    private static byte[]? Read(string path)
+    private byte[]? Read(string path)
     {
         var elapsed = Stopwatch.StartNew();
         var delay = TimeSpan.FromMilliseconds(10);
@@ -189,7 +198,7 @@ public sealed class DpapiCredentialStore : ICredentialStore
             }
             catch (IOException ex) when (ex.HResult is ErrorSharingViolation or ErrorLockViolation && elapsed.Elapsed + delay < SharingTimeout)
             {
-                Thread.Sleep(delay);
+                wait(delay);
                 delay *= 2;
             }
         }

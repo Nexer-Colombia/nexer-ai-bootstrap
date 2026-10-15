@@ -148,21 +148,22 @@ public sealed class DpapiCredentialStoreTests : IDisposable
     }
 
     [Fact]
-    public async Task Get_waits_for_another_program_that_holds_the_file_briefly()
+    public void Get_waits_for_another_program_that_holds_the_file_briefly()
     {
         store.Set(Acme, Secret);
         var file = Assert.Single(Directory.GetFiles(folder));
-        var held = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.None);
-        var release = Task.Run(
-            async () =>
-            {
-                await Task.Delay(50);
-                await held.DisposeAsync();
-            },
-            TestContext.Current.CancellationToken);
+        using var held = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.None);
+        var waits = new List<TimeSpan>();
 
-        Assert.Equal(Secret, store.Get(Acme));
-        await release;
+        // The other program closes the file while Get waits after its first sharing violation; no timing involved.
+        var patient = new DpapiCredentialStore(folder, delay =>
+        {
+            waits.Add(delay);
+            held.Dispose();
+        });
+
+        Assert.Equal(Secret, patient.Get(Acme));
+        Assert.Equal([TimeSpan.FromMilliseconds(10)], waits);
     }
 
     [Fact]
