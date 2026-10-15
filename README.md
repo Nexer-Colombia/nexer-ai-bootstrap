@@ -109,6 +109,14 @@ Every `claude` command runs in the adapter's working directory, which `nexer-ai 
 
 `DpapiCredentialStore` (`src/NexerAI.Adapters/Credentials`, Windows only) implements `ICredentialStore`: one file per tracker in `%USERPROFILE%\.nexer-ai\credentials\`, encrypted with DPAPI for the current user. The tracker URL is normalized (lowercase scheme, host and path, no default port, no trailing slash) and the file is named `<sha256 of the normalized URL>.dpapi`, so neither the URL nor the secret is stored in plain text. The DPAPI entropy binds each file to its URL: a file copied over another tracker's entry does not decrypt. A URL with user info, a query or a fragment is rejected without being echoed. A file that does not decrypt raises `CredentialStoreException` with its path and is left untouched; no message ever contains the secret. Writes go to a temporary file that is moved over the entry. DPAPI does not stop a process running as the same user, so the baseline denies Claude reads of the folder.
 
+## Prompts
+
+`ConsolePrompter` (`src/NexerAI.Adapters/Prompts`) implements `IPrompter` at the console. Questions go to standard error, so standard output keeps a command's results.
+
+- `Choose` lists numbered choices and accepts a number or the choice itself, ignoring case. `Confirm` reads `y`, `yes`, `n` or `no`, and an empty answer is no. Any other answer asks again; end of input (Ctrl+Z then Enter) throws `OperationCanceledException`, so a closed input never loops.
+- `ReadSecret` echoes nothing, not even a `*` per character, so a screen share shows neither the secret nor its length. Backspace, Enter and pasting work; arrows and other control keys are ignored; Escape or Ctrl+C throws `OperationCanceledException`. Keys left after Enter, such as the rest of a pasted clipboard, are discarded so the next question cannot echo them. The characters are kept in an array that is cleared afterwards; the returned string cannot be wiped.
+- Redirected standard input, or a terminal that cannot read keys, throws `PromptUnavailableException` before anything is asked. Scripts and CI will pass answers as options with `--non-interactive`, through another `IPrompter`; nothing is read from a pipe. No message repeats an answer.
+
 ## Task key
 
 The Nexer mod adds up agent time per task, and a task is a branch of a working copy: `<repository root>#<branch>`, for example `c:/work/acme-website#feature/12345-header`. Both are local values that never leave the machine. `TaskKeyResolver` (`src/NexerAI.Core/Tasks`) computes it by reading git files through `IReadOnlyFileSystem`, without starting git:

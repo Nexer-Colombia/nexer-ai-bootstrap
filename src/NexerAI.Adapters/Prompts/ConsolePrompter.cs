@@ -84,7 +84,126 @@ public sealed class ConsolePrompter : IPrompter
     }
 
     /// <inheritdoc />
-    public string ReadSecret(string prompt) => throw new NotSupportedException();
+    /// <remarks>
+    /// Nothing is echoed, not even a <c>*</c> per character, so a screen share or recording shows neither the secret
+    /// nor its length. Backspace removes the last character (a surrogate pair as one), Enter ends the input, Escape
+    /// or Ctrl+C cancels; arrows, function keys and other control keys are ignored. Keys left after Enter or a
+    /// cancel, such as the rest of a pasted clipboard, are discarded so the next question cannot echo them. An
+    /// empty or blank answer asks again. The characters are collected in an array that is cleared afterwards; the
+    /// returned string cannot be wiped.
+    /// </remarks>
+    /// <exception cref="PromptUnavailableException">There is no interactive console; the message never holds what was typed.</exception>
+    /// <exception cref="OperationCanceledException">The person pressed Escape or Ctrl+C.</exception>
+    public string ReadSecret(string prompt)
+    {
+        EnsureInteractive(prompt);
+        bool? controlCAsInput = null;
+        try
+        {
+            // Ctrl+C would otherwise end the process with the cursor left on the prompt line.
+            controlCAsInput = console.TreatControlCAsInput;
+            console.TreatControlCAsInput = true;
+            while (true)
+            {
+                console.Write($"{prompt} (input hidden; Esc cancels): ");
+                string? secret;
+                try
+                {
+                    secret = ReadHidden();
+                }
+                finally
+                {
+                    console.Write(Environment.NewLine);
+                }
+
+                if (secret is not null)
+                {
+                    return secret;
+                }
+
+                console.Write("Nothing was entered. Type or paste the value, or press Esc to cancel." + Environment.NewLine);
+            }
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or IOException)
+        {
+            throw Unavailable(prompt, ex);
+        }
+        finally
+        {
+            if (controlCAsInput is { } previous)
+            {
+                Restore(previous);
+            }
+        }
+    }
+
+    /// <summary>Reads keys until Enter; returns <see langword="null"/> for a blank answer.</summary>
+    private string? ReadHidden()
+    {
+        var buffer = new char[64];
+        var length = 0;
+        try
+        {
+            while (true)
+            {
+                var key = console.ReadKey();
+                if (key.Key == ConsoleKey.Enter || key.KeyChar is '\r' or '\n')
+                {
+                    DiscardPendingKeys();
+                    return buffer.AsSpan(0, length).IsWhiteSpace() ? null : new string(buffer, 0, length);
+                }
+
+                if (key.Key == ConsoleKey.Escape || key.KeyChar == '\x03')
+                {
+                    DiscardPendingKeys();
+                    throw new OperationCanceledException("The secret prompt was cancelled.");
+                }
+
+                if (key.Key == ConsoleKey.Backspace)
+                {
+                    var remove = length >= 2 && char.IsSurrogatePair(buffer[length - 2], buffer[length - 1]) ? 2 : Math.Min(length, 1);
+                    length -= remove;
+                    Array.Clear(buffer, length, remove);
+                }
+                else if (!char.IsControl(key.KeyChar))
+                {
+                    if (length == buffer.Length)
+                    {
+                        var larger = new char[buffer.Length * 2];
+                        buffer.CopyTo(larger, 0);
+                        Array.Clear(buffer);
+                        buffer = larger;
+                    }
+
+                    buffer[length++] = key.KeyChar;
+                }
+            }
+        }
+        finally
+        {
+            Array.Clear(buffer);
+        }
+    }
+
+    private void DiscardPendingKeys()
+    {
+        while (console.KeyAvailable)
+        {
+            console.ReadKey();
+        }
+    }
+
+    private void Restore(bool controlCAsInput)
+    {
+        try
+        {
+            console.TreatControlCAsInput = controlCAsInput;
+        }
+        catch (IOException)
+        {
+            // The console went away; there is nothing left to restore.
+        }
+    }
 
     private string Ask(string prompt)
     {
