@@ -13,7 +13,14 @@ namespace NexerAI.Adapters.ClaudeCode;
 /// </summary>
 public sealed class ClaudeCodeAgentInstaller : IAgentInstaller
 {
-    private const string Claude = "claude";
+    private const string SetupPage = "https://code.claude.com/docs/en/setup";
+
+    /// <summary>
+    /// The native installer puts <c>claude.exe</c> on <c>PATH</c>; npm, still a supported install
+    /// (https://code.claude.com/docs/en/setup), puts the <c>claude.cmd</c> launcher there
+    /// (https://code.claude.com/docs/en/troubleshoot-install). An <c>.exe</c> comes first, as with the default <c>PATHEXT</c>.
+    /// </summary>
+    private static readonly string[] ClaudeFileNames = ["claude.exe", "claude.cmd"];
 
     private readonly IProcessRunner processRunner;
 
@@ -23,12 +30,16 @@ public sealed class ClaudeCodeAgentInstaller : IAgentInstaller
 
     private readonly string workingDirectory;
 
+    private readonly string? searchPath;
+
     /// <summary>Creates the adapter.</summary>
     /// <param name="processRunner">Runs <c>claude</c>.</param>
     /// <param name="fileSystem">Reads <paramref name="configFile"/> and the git files that locate the repository root.</param>
     /// <param name="configFile">Absolute path of <c>.claude.json</c>, usually <see cref="DefaultConfigFile"/>.</param>
-    /// <param name="workingDirectory">Absolute folder the commands act on.</param>
-    public ClaudeCodeAgentInstaller(IProcessRunner processRunner, IReadOnlyFileSystem fileSystem, string configFile, string workingDirectory)
+    /// <param name="workingDirectory">Absolute folder the commands act on: a drive path or a UNC path with a share.</param>
+    /// <param name="searchPath">Where <c>claude</c> is looked for, usually <see cref="DefaultSearchPath"/>.</param>
+    public ClaudeCodeAgentInstaller(
+        IProcessRunner processRunner, IReadOnlyFileSystem fileSystem, string configFile, string workingDirectory, string? searchPath)
     {
         ArgumentNullException.ThrowIfNull(processRunner);
         ArgumentNullException.ThrowIfNull(fileSystem);
@@ -39,7 +50,7 @@ public sealed class ClaudeCodeAgentInstaller : IAgentInstaller
             throw new ArgumentException($"The Claude Code configuration file '{configFile}' is not absolute.", nameof(configFile));
         }
 
-        if (!Path.IsPathFullyQualified(workingDirectory))
+        if (!ClaudeConfig.IsAbsoluteFolder(workingDirectory))
         {
             throw new ArgumentException($"The working directory '{workingDirectory}' is not absolute.", nameof(workingDirectory));
         }
@@ -48,24 +59,39 @@ public sealed class ClaudeCodeAgentInstaller : IAgentInstaller
         this.fileSystem = fileSystem;
         this.configFile = configFile;
         this.workingDirectory = workingDirectory;
+        this.searchPath = searchPath;
     }
+
+    /// <summary>The <c>PATH</c> environment variable.</summary>
+    public static string? DefaultSearchPath => Environment.GetEnvironmentVariable("PATH");
 
     /// <summary>The <c>.claude.json</c> of the current user, honoring <c>CLAUDE_CONFIG_DIR</c> (see <see cref="ClaudeConfig.FilePath"/>).</summary>
     public static string DefaultConfigFile => ClaudeConfig.FilePath(
         Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR"), Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
 
     /// <inheritdoc />
-    /// <exception cref="AgentStateException"><c>claude</c> cannot be started, fails, or prints output that is not recognized.</exception>
+    /// <exception cref="AgentStateException"><c>claude</c> is not on <c>PATH</c>, cannot be started, fails, or prints output that is not recognized.</exception>
     public async Task<IReadOnlyList<InstalledPlugin>> GetInstalledPluginsAsync(CancellationToken ct)
     {
+        var claude = FindClaude() ?? throw new AgentStateException(
+            $@"Claude Code was not found: no claude.exe or claude.cmd in the folders on PATH. Install it (the native installer puts claude.exe in %USERPROFILE%\.local\bin, see {SetupPage}), open a new terminal and try again.");
         ProcessResult result;
         try
         {
-            result = await processRunner.RunAsync(Claude, ["plugin", "list", "--json"], workingDirectory, ct).ConfigureAwait(false);
+            result = await processRunner.RunAsync(claude, ["plugin", "list", "--json"], workingDirectory, ct).ConfigureAwait(false);
         }
         catch (Win32Exception ex)
         {
-            throw new AgentStateException("Claude Code cannot be started: 'claude' was not found on PATH or failed to start.", ex);
+            throw new AgentStateException(ex.NativeErrorCode switch
+            {
+                ProcessRunner.ErrorDirectory => $"Claude Code cannot be started: the working directory '{workingDirectory}' does not exist.",
+                ProcessRunner.ErrorFileNotFound or ProcessRunner.ErrorPathNotFound => $"Claude Code cannot be started: '{claude}' no longer exists. Install it again (see {SetupPage}).",
+                _ => $"Claude Code at '{claude}' cannot be started (Windows error {ex.NativeErrorCode}: {ex.Message}).",
+            }, ex);
+        }
+        catch (ArgumentException ex)
+        {
+            throw new AgentStateException($"Claude Code at '{claude}' cannot be run safely: {ex.Message}", ex);
         }
 
         // Its output is not passed on: it can quote settings.
@@ -88,6 +114,34 @@ public sealed class ClaudeCodeAgentInstaller : IAgentInstaller
         var json = fileSystem.ReadAllText(configFile)
             ?? throw new AgentStateException($"Claude Code's configuration file '{configFile}' cannot be read.");
         return Task.FromResult(ClaudeConfig.ReadMcpServers(json, ClaudeConfig.ProjectFolder(fileSystem, workingDirectory)));
+    }
+
+    /// <summary>
+    /// The first <see cref="ClaudeFileNames"/> match in the folders of <see cref="searchPath"/>, folder by folder like
+    /// <c>cmd.exe</c>. Unlike <c>cmd.exe</c> and <c>CreateProcess</c>, neither the current nor the working directory
+    /// is searched, nor a relative entry: a cloned repository could plant a <c>claude.exe</c>.
+    /// </summary>
+    private string? FindClaude()
+    {
+        foreach (var entry in (searchPath ?? string.Empty).Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var folder = entry.Trim('"');
+            if (!Path.IsPathFullyQualified(folder))
+            {
+                continue;
+            }
+
+            foreach (var name in ClaudeFileNames)
+            {
+                var file = Path.Combine(folder, name);
+                if (fileSystem.FileExists(file))
+                {
+                    return file;
+                }
+            }
+        }
+
+        return null;
     }
 
     /// <inheritdoc />

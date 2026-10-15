@@ -131,6 +131,53 @@ public sealed class DpapiCredentialStoreTests : IDisposable
         Assert.Equal(Secret, store.Get(Acme));
     }
 
+    [Fact]
+    public void An_entry_that_cannot_be_read_is_reported_with_its_path_and_without_the_tracker()
+    {
+        store.Set(Acme, Secret);
+        var file = Assert.Single(Directory.GetFiles(folder));
+        File.Delete(file);
+        Directory.CreateDirectory(file); // Reading a folder as a file is denied.
+
+        var ex = Assert.Throws<CredentialStoreException>(() => store.Get(Acme));
+
+        Assert.Contains(file, ex.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("azure", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("acme", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.IsType<UnauthorizedAccessException>(ex.InnerException);
+    }
+
+    [Fact]
+    public async Task Get_waits_for_another_program_that_holds_the_file_briefly()
+    {
+        store.Set(Acme, Secret);
+        var file = Assert.Single(Directory.GetFiles(folder));
+        var held = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.None);
+        var release = Task.Run(
+            async () =>
+            {
+                await Task.Delay(50);
+                await held.DisposeAsync();
+            },
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(Secret, store.Get(Acme));
+        await release;
+    }
+
+    [Fact]
+    public void Get_reports_a_file_another_program_keeps_open()
+    {
+        store.Set(Acme, Secret);
+        var file = Assert.Single(Directory.GetFiles(folder));
+        using var held = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.None);
+
+        var ex = Assert.Throws<CredentialStoreException>(() => store.Get(Acme));
+
+        Assert.Contains(file, ex.Message, StringComparison.Ordinal);
+        Assert.IsType<IOException>(ex.InnerException);
+    }
+
     [Theory]
     [InlineData("dev.azure.com/acme", UriKind.Relative)]
     [InlineData("file:///C:/tokens", UriKind.Absolute)]

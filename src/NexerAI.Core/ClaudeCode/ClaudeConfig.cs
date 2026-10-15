@@ -25,6 +25,16 @@ public static class ClaudeConfig
     }
 
     /// <summary>
+    /// Whether <paramref name="path"/> is an absolute drive path (<c>C:\x</c>) or a UNC path with a server and a share
+    /// (<c>\server\share</c>), as <see cref="ProjectFolder"/> requires; either separator.
+    /// </summary>
+    public static bool IsAbsoluteFolder(string path)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+        return WindowsPath.Parse(path) is not null;
+    }
+
+    /// <summary>
     /// The folder whose entry in <c>projects</c> holds the local-scope MCP servers of <paramref name="workingDirectory"/>:
     /// the root of its git working copy, or the folder itself outside one, with forward slashes. Observed on 2.1.300:
     /// <c>claude mcp add --scope local</c> run in a subfolder writes under the repository root.

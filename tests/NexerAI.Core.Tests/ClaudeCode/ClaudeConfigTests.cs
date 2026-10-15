@@ -123,6 +123,19 @@ public sealed class ClaudeConfigTests
         Assert.Equal(expected, ClaudeConfig.ProjectFolder(fileSystem, workingDirectory));
     }
 
+    [Theory]
+    [InlineData(@"C:\t\ap", true)]
+    [InlineData("C:/", true)]
+    [InlineData(@"\\server\share", true)]
+    [InlineData(@"\\server", false)]
+    [InlineData(@"\\server\", false)]
+    [InlineData(@"t\ap", false)]
+    [InlineData("C:ap", false)]
+    public void IsAbsoluteFolder_accepts_what_ProjectFolder_accepts(string path, bool expected)
+    {
+        Assert.Equal(expected, ClaudeConfig.IsAbsoluteFolder(path));
+    }
+
     [Fact]
     public void ProjectFolder_rejects_a_relative_working_directory()
     {
