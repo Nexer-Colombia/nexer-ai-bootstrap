@@ -14,12 +14,14 @@ namespace NexerAI.Core.State;
 /// Projects set up with <c>nexer-ai project</c>, keyed by normalized remote (see
 /// <see cref="Remotes.RemoteNormalizer"/>).
 /// </param>
+/// <param name="Switch">The channel switch in progress, or <see langword="null"/> when none is.</param>
 /// <remarks>Collection members compare by reference, so two states are equal only if they share dictionary instances.</remarks>
 public sealed record InstallState(
     Channel? Channel,
     Role? Role,
     IReadOnlyDictionary<string, string> InstalledPlugins,
-    IReadOnlyDictionary<string, ProjectState> Projects)
+    IReadOnlyDictionary<string, ProjectState> Projects,
+    ChannelSwitch? Switch = null)
 {
     /// <summary>The state before anything was installed.</summary>
     public static InstallState Empty { get; } = new(
@@ -36,6 +38,19 @@ public sealed record InstallState(
         return this with { Projects = projects.AsReadOnly() };
     }
 }
+
+/// <summary>
+/// A channel switch that started and has not finished (design 4.1). It is written before the first change and cleared
+/// at the end, so any rerun finishes the switch instead of reverting it.
+/// </summary>
+/// <param name="From">The channel the plugins are moved away from.</param>
+/// <param name="To">The channel the plugins are moved to.</param>
+/// <param name="PersonDisabled">
+/// The installations of <paramref name="From"/> plugins the person had disabled when the switch began: the switch
+/// disables every old id first, so only this record tells which new ids must be disabled again.
+/// </param>
+/// <remarks>Collection members compare by reference.</remarks>
+public sealed record ChannelSwitch(Channel From, Channel To, IReadOnlyList<PluginLocation> PersonDisabled);
 
 /// <summary>What <c>nexer-ai project</c> installed for one project.</summary>
 /// <param name="Profile">Id of the project profile that matched.</param>

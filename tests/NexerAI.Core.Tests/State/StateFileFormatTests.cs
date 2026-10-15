@@ -6,7 +6,7 @@ namespace NexerAI.Core.Tests.State;
 
 public sealed class StateFileFormatTests
 {
-    /// <summary>The design example, as the serializer writes it.</summary>
+    /// <summary>The design example (schema 1), which this version still reads.</summary>
     private static readonly string DesignExample = """
         {
           "schema": 1,
@@ -31,6 +31,34 @@ public sealed class StateFileFormatTests
         }
         """.ReplaceLineEndings("\n") + "\n";
 
+    /// <summary>The design example as the serializer writes it now: only the schema version differs.</summary>
+    private static readonly string DesignExampleSchema2 = DesignExample.Replace("\"schema\": 1,", "\"schema\": 2,", StringComparison.Ordinal);
+
+    /// <summary>A state file in the middle of a channel switch (design 4.1, 4.4).</summary>
+    private static readonly string SwitchExample = """
+        {
+          "schema": 2,
+          "channel": "nexer",
+          "installed": {},
+          "projects": {},
+          "channelSwitch": {
+            "from": "nexer",
+            "to": "nexer-early",
+            "personDisabled": [
+              {
+                "id": "nexer-qa@nexer",
+                "scope": "user"
+              },
+              {
+                "id": "nexer-dev-umbraco@nexer",
+                "scope": "local",
+                "folder": "C:\\repos\\acme"
+              }
+            ]
+          }
+        }
+        """.ReplaceLineEndings("\n") + "\n";
+
     private static readonly ProjectState Website = new("acme-website", ["nexer-dev-umbraco", "nexer-engram"], ["nexer-azure-devops"]);
 
     private static InstallState DesignState() => InstallState.Empty
@@ -42,9 +70,59 @@ public sealed class StateFileFormatTests
     };
 
     [Fact]
-    public void Serialize_writes_the_design_example_byte_for_byte()
+    public void Serialize_writes_the_design_example_byte_for_byte_with_schema_2()
     {
-        Assert.Equal(DesignExample, StateFileFormat.Serialize(DesignState()));
+        Assert.Equal(DesignExampleSchema2, StateFileFormat.Serialize(DesignState()));
+    }
+
+    [Fact]
+    public void Deserialize_reads_schema_1_and_schema_2_the_same_way()
+    {
+        Assert.Equal(StateFileFormat.Serialize(StateFileFormat.Deserialize(DesignExample)), StateFileFormat.Serialize(StateFileFormat.Deserialize(DesignExampleSchema2)));
+    }
+
+    [Fact]
+    public void Serialize_writes_a_pending_channel_switch_last()
+    {
+        var state = InstallState.Empty with
+        {
+            Channel = Channel.Stable,
+            Switch = new ChannelSwitch(
+                Channel.Stable,
+                Channel.Early,
+                [new PluginLocation("nexer-qa", "nexer", PluginScope.User, null), new PluginLocation("nexer-dev-umbraco", "nexer", PluginScope.Local, @"C:\repos\acme")]),
+        };
+
+        Assert.Equal(SwitchExample, StateFileFormat.Serialize(state));
+    }
+
+    [Fact]
+    public void Deserialize_reads_a_pending_channel_switch()
+    {
+        var pending = StateFileFormat.Deserialize(SwitchExample).Switch!;
+
+        Assert.Same(Channel.Stable, pending.From);
+        Assert.Same(Channel.Early, pending.To);
+        Assert.Equal(
+            [new PluginLocation("nexer-qa", "nexer", PluginScope.User, null), new PluginLocation("nexer-dev-umbraco", "nexer", PluginScope.Local, @"C:\repos\acme")],
+            pending.PersonDisabled);
+    }
+
+    [Fact]
+    public void Deserialize_reads_a_switch_without_disabled_plugins_and_no_switch_as_null()
+    {
+        var state = StateFileFormat.Deserialize("""{ "schema": 2, "channelSwitch": { "from": "nexer-early", "to": "nexer", "personDisabled": null } }""");
+
+        Assert.Empty(state.Switch!.PersonDisabled);
+        Assert.Null(StateFileFormat.Deserialize("""{ "schema": 2, "channelSwitch": null }""").Switch);
+        Assert.DoesNotContain("channelSwitch", StateFileFormat.Serialize(InstallState.Empty), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Deserialize_ignores_a_channelSwitch_in_a_schema_1_file()
+    {
+        // Schema 1 never had one: like any unknown property of that version, it is not read.
+        Assert.Null(StateFileFormat.Deserialize("""{ "schema": 1, "channelSwitch": { "from": "x" } }""").Switch);
     }
 
     [Fact]
@@ -60,7 +138,7 @@ public sealed class StateFileFormatTests
         Assert.Equal("acme-website", project.Profile);
         Assert.Equal(["nexer-dev-umbraco", "nexer-engram"], project.Plugins);
         Assert.Equal(["nexer-azure-devops"], project.McpServers);
-        Assert.Equal(DesignExample, StateFileFormat.Serialize(state));
+        Assert.Equal(DesignExampleSchema2, StateFileFormat.Serialize(state));
     }
 
     [Fact]
@@ -85,7 +163,7 @@ public sealed class StateFileFormatTests
     [Fact]
     public void Serialize_writes_the_empty_state_without_channel_and_role()
     {
-        var expected = "{\n  \"schema\": 1,\n  \"installed\": {},\n  \"projects\": {}\n}\n";
+        var expected = "{\n  \"schema\": 2,\n  \"installed\": {},\n  \"projects\": {}\n}\n";
 
         Assert.Equal(expected, StateFileFormat.Serialize(InstallState.Empty));
         Assert.Equal(expected, StateFileFormat.Serialize(StateFileFormat.Deserialize(expected)));
@@ -145,7 +223,7 @@ public sealed class StateFileFormatTests
     [Theory]
     [InlineData("""{}""", "no 'schema'")]
     [InlineData("""{ "schema": null }""", "no 'schema'")]
-    [InlineData("""{ "schema": 2 }""", "schema version 2")]
+    [InlineData("""{ "schema": 3 }""", "schema version 3")]
     [InlineData("""{ "schema": 0 }""", "schema version 0")]
     [InlineData("""{ "schema": "1" }""", "schema version \"1\"")]
     [InlineData("""{ "schema": 1.0 }""", "schema version 1.0")]
@@ -156,6 +234,16 @@ public sealed class StateFileFormatTests
     [InlineData("""{ "schema": 1, "projects": { "github.com/acme/api": {} } }""", "'github.com/acme/api'")]
     [InlineData("""{ "schema": 1, "projects": { "github.com/acme/api": { "profile": "p", "plugins": [null] } } }""", "'github.com/acme/api'")]
     [InlineData("""{ "schema": 1, "projects": { "github.com/acme/api": { "profile": "p", "mcp": [null] } } }""", "'github.com/acme/api'")]
+    [InlineData("""{ "schema": 2, "channelSwitch": { "to": "nexer" } }""", "switch")]
+    [InlineData("""{ "schema": 2, "channelSwitch": { "from": "nexer" } }""", "switch")]
+    [InlineData("""{ "schema": 2, "channelSwitch": { "from": "nexer", "to": "beta" } }""", "'beta'")]
+    [InlineData("""{ "schema": 2, "channelSwitch": { "from": "nexer", "to": "nexer" } }""", "switch")]
+    [InlineData("""{ "schema": 2, "channelSwitch": { "from": "nexer", "to": "nexer-early", "personDisabled": [null] } }""", "disabled plugin")]
+    [InlineData("""{ "schema": 2, "channelSwitch": { "from": "nexer", "to": "nexer-early", "personDisabled": [{ "scope": "user" }] } }""", "disabled plugin")]
+    [InlineData("""{ "schema": 2, "channelSwitch": { "from": "nexer", "to": "nexer-early", "personDisabled": [{ "id": "nexer-qa", "scope": "user" }] } }""", "disabled plugin")]
+    [InlineData("""{ "schema": 2, "channelSwitch": { "from": "nexer", "to": "nexer-early", "personDisabled": [{ "id": "nexer-qa@nexer", "scope": "project" }] } }""", "disabled plugin")]
+    [InlineData("""{ "schema": 2, "channelSwitch": { "from": "nexer", "to": "nexer-early", "personDisabled": [{ "id": "nexer-qa@nexer", "scope": "local" }] } }""", "disabled plugin")]
+    [InlineData("""{ "schema": 2, "channelSwitch": { "from": "nexer", "to": "nexer-early", "personDisabled": [{ "id": "nexer-qa@nexer", "scope": "user", "folder": "C:\\x" }] } }""", "disabled plugin")]
     public void Deserialize_rejects_an_invalid_document(string json, string messageFragment)
     {
         var ex = Assert.Throws<StateFileException>(() => StateFileFormat.Deserialize(json));
