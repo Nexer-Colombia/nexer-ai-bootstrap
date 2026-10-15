@@ -405,6 +405,87 @@ public sealed class ClaudeCodeAgentInstallerTests : IDisposable
     }
 
     [Fact]
+    public async Task AddMcpServerAsync_restores_the_previous_server_when_the_new_one_cannot_be_added()
+    {
+        temp.WriteFile(@"bin\claude.exe");
+        WriteLocalServer("nexer-jira", "C:/old/nexer-ai.exe", ["mcp-launch", "--type", "old"]);
+        var runner = new FakeProcessRunner();
+        runner.Results.Enqueue(new(0, string.Empty, string.Empty));
+        runner.Results.Enqueue(new(1, "ghp_secret-out", "ghp_secret-err"));
+        runner.Results.Enqueue(new(0, string.Empty, string.Empty));
+
+        var error = await Assert.ThrowsAsync<AgentStateException>(
+            () => Installer(runner).AddMcpServerAsync(Launcher("nexer-jira", PluginScope.Local), TestContext.Current.CancellationToken));
+
+        Assert.Equal(3, runner.Runs.Count);
+        Assert.Equal(
+            ["mcp", "add", "--transport", "stdio", "--scope", "local", "nexer-jira", "--", "C:/old/nexer-ai.exe", "mcp-launch", "--type", "old"],
+            runner.Runs[2].Arguments);
+        Assert.Contains("nexer-jira", error.Message, StringComparison.Ordinal);
+        Assert.Contains("restored", error.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("ghp_", error.ToString(), StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(-1)]
+    public async Task AddMcpServerAsync_says_the_server_is_missing_when_the_restore_fails_too(int restoreExitCode)
+    {
+        temp.WriteFile(@"bin\claude.exe");
+        WriteLocalServer("nexer-jira", "C:/old/nexer-ai.exe", ["mcp-launch"]);
+        var runner = new FakeProcessRunner();
+        runner.Results.Enqueue(new(0, string.Empty, string.Empty));
+        runner.Results.Enqueue(new(1, string.Empty, string.Empty));
+        runner.Results.Enqueue(new(restoreExitCode, "ghp_secret-out", string.Empty));
+
+        var error = await Assert.ThrowsAsync<AgentStateException>(
+            () => Installer(runner).AddMcpServerAsync(Launcher("nexer-jira", PluginScope.Local), TestContext.Current.CancellationToken));
+
+        Assert.Equal(3, runner.Runs.Count);
+        Assert.Contains("nexer-jira", error.Message, StringComparison.Ordinal);
+        Assert.Contains("missing", error.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("ghp_", error.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AddMcpServerAsync_says_the_server_is_missing_when_its_previous_entry_was_not_a_command_line()
+    {
+        temp.WriteFile(@"bin\claude.exe");
+        temp.WriteFile(@"repo\.git\HEAD", "ref: refs/heads/main\n");
+        var key = Path.Combine(temp.Path, "repo").Replace('\\', '/');
+        File.WriteAllText(
+            ConfigFile,
+            """{"projects":{"KEY":{"mcpServers":{"nexer-jira":{"type":"http","url":"https://example.invalid/mcp"}}}}}""".Replace("KEY", key, StringComparison.Ordinal));
+        var runner = new FakeProcessRunner();
+        runner.Results.Enqueue(new(0, string.Empty, string.Empty));
+        runner.Results.Enqueue(new(1, string.Empty, string.Empty));
+
+        var error = await Assert.ThrowsAsync<AgentStateException>(
+            () => Installer(runner).AddMcpServerAsync(Launcher("nexer-jira", PluginScope.Local), TestContext.Current.CancellationToken));
+
+        Assert.Equal(2, runner.Runs.Count);
+        Assert.Contains("missing", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AddMcpServerAsync_restores_with_a_token_that_is_not_cancelled_when_the_add_is_cancelled()
+    {
+        temp.WriteFile(@"bin\claude.exe");
+        WriteLocalServer("nexer-jira", "C:/old/nexer-ai.exe", ["mcp-launch"]);
+        using var cancel = new CancellationTokenSource();
+        var restoreTokenCancelled = new List<bool>();
+        var runner = new CancellingRunner(cancel, restoreTokenCancelled);
+
+        var error = await Assert.ThrowsAsync<AgentStateException>(
+            () => Installer(runner).AddMcpServerAsync(Launcher("nexer-jira", PluginScope.Local), cancel.Token));
+
+        Assert.Equal([false], restoreTokenCancelled);
+        Assert.Equal(["remove", "add", "add"], runner.Subcommands);
+        Assert.Contains("restored", error.Message, StringComparison.Ordinal);
+        Assert.IsAssignableFrom<OperationCanceledException>(error.InnerException);
+    }
+
+    [Fact]
     public async Task AddMcpServerAsync_stops_when_the_old_server_cannot_be_removed()
     {
         temp.WriteFile(@"bin\claude.exe");
@@ -462,6 +543,30 @@ public sealed class ClaudeCodeAgentInstallerTests : IDisposable
     public void Constructor_rejects_a_working_directory_without_a_UNC_share(string workingDirectory)
     {
         Assert.Throws<ArgumentException>(() => new ClaudeCodeAgentInstaller(new FakeProcessRunner(), new LocalFileSystem(), ConfigFile, workingDirectory, Bin));
+    }
+
+    /// <summary>Removes fine, cancels the token while the first add runs and throws, then answers the restore.</summary>
+    private sealed class CancellingRunner(CancellationTokenSource cancel, List<bool> restoreTokenCancelled) : IProcessRunner
+    {
+        public List<string> Subcommands { get; } = [];
+
+        public async Task<ProcessResult> RunAsync(
+            string fileName, IReadOnlyList<string> arguments, string workingDirectory, CancellationToken ct, string? standardInput = null)
+        {
+            Subcommands.Add(arguments[1]);
+            if (Subcommands.Count == 2)
+            {
+                await cancel.CancelAsync();
+                ct.ThrowIfCancellationRequested();
+            }
+
+            if (Subcommands.Count == 3)
+            {
+                restoreTokenCancelled.Add(ct.IsCancellationRequested);
+            }
+
+            return new ProcessResult(0, string.Empty, string.Empty);
+        }
     }
 
     private static McpServerRegistration Launcher(string name, PluginScope scope) =>

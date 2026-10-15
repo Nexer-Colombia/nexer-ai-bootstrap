@@ -24,6 +24,8 @@ public sealed class ClaudeCodeAgentInstaller : IAgentInstaller
     /// </summary>
     private static readonly string[] ClaudeFileNames = ["claude.exe", "claude.cmd"];
 
+    private static readonly TimeSpan RestoreTimeout = TimeSpan.FromSeconds(30);
+
     private readonly IProcessRunner processRunner;
 
     private readonly IReadOnlyFileSystem fileSystem;
@@ -102,6 +104,8 @@ public sealed class ClaudeCodeAgentInstaller : IAgentInstaller
     /// <c>claude mcp add --transport stdio --scope &lt;scope&gt; &lt;name&gt; -- &lt;command&gt; [args...]</c>
     /// (https://code.claude.com/docs/en/mcp#option-3-add-a-local-stdio-server). Never <c>--env</c>: Claude Code
     /// stores its values in plain text, so a secret reaches the server through the launcher instead (design 4.4).
+    /// When the <c>add</c> after a <c>remove</c> fails or is cancelled, the previous stdio command line (read from
+    /// <c>.claude.json</c>, never its <c>env</c>) is registered again once, and the error says whether it was restored.
     /// </remarks>
     /// <exception cref="AgentStateException">
     /// <c>.claude.json</c> cannot be read or is not recognized, <c>claude</c> cannot be run, or a command exits with
@@ -113,6 +117,8 @@ public sealed class ClaudeCodeAgentInstaller : IAgentInstaller
         ct.ThrowIfCancellationRequested();
 
         var scope = ScopeName(registration.Scope);
+        McpServerRegistration? previous = null;
+        var removed = false;
         if (ReadConfig() is { } json)
         {
             var projectFolder = ClaudeConfig.ProjectFolder(fileSystem, workingDirectory);
@@ -123,12 +129,55 @@ public sealed class ClaudeCodeAgentInstaller : IAgentInstaller
                     return;
                 }
 
+                previous = ClaudeConfig.ReadMcpCommandLine(json, projectFolder, registration.Name, registration.Scope);
                 await RunMcpCommandAsync("remove", [], scope, registration.Name, [], ct).ConfigureAwait(false);
+                removed = true;
             }
         }
 
-        await RunMcpCommandAsync(
-            "add", ["--transport", "stdio"], scope, registration.Name, ["--", registration.Command, .. registration.Arguments], ct).ConfigureAwait(false);
+        try
+        {
+            await AddAsync(registration, scope, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (removed && (ex is AgentStateException || (ex is OperationCanceledException && ct.IsCancellationRequested)))
+        {
+            // The old server is gone: put it back, so a failed or cancelled replacement does not leave the person without it.
+            var restored = await TryRestoreAsync(previous, scope).ConfigureAwait(false);
+            var cause = ex is OperationCanceledException ? "was cancelled" : "failed";
+            throw new AgentStateException(
+                $"Replacing the MCP server '{registration.Name}' ({scope} scope) {cause} after its old entry was removed; "
+                + (restored
+                    ? "the previous entry was restored."
+                    : "the previous entry could not be restored, so the server is now missing: run 'nexer-ai project' again to register it."),
+                ex);
+        }
+    }
+
+    private Task AddAsync(McpServerRegistration registration, string scope, CancellationToken ct) =>
+        RunMcpCommandAsync(
+            "add", ["--transport", "stdio"], scope, registration.Name, ["--", registration.Command, .. registration.Arguments], ct);
+
+    /// <summary>
+    /// Registers <paramref name="previous"/> again, once, with its own short timeout: the token of the caller may be the
+    /// reason the replacement stopped. Never throws; <see langword="false"/> when there is nothing to restore or it failed.
+    /// </summary>
+    private async Task<bool> TryRestoreAsync(McpServerRegistration? previous, string scope)
+    {
+        if (previous is null)
+        {
+            return false;
+        }
+
+        using var timeout = new CancellationTokenSource(RestoreTimeout);
+        try
+        {
+            await AddAsync(previous, scope, timeout.Token).ConfigureAwait(false);
+            return true;
+        }
+        catch (Exception ex) when (ex is AgentStateException or OperationCanceledException)
+        {
+            return false;
+        }
     }
 
     /// <summary>The text of <c>.claude.json</c>, or <see langword="null"/> when it does not exist yet: Claude Code creates it on first use.</summary>
