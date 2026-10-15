@@ -167,6 +167,20 @@ public sealed class DpapiCredentialStoreTests : IDisposable
     }
 
     [Fact]
+    public void Get_retries_a_file_another_program_keeps_open_until_the_waits_add_up_to_half_a_second()
+    {
+        store.Set(Acme, Secret);
+        var file = Assert.Single(Directory.GetFiles(folder));
+        using var held = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.None);
+        var waits = new List<TimeSpan>();
+        var patient = new DpapiCredentialStore(folder, waits.Add);
+
+        Assert.Throws<CredentialStoreException>(() => patient.Get(Acme));
+
+        Assert.Equal([10, 20, 40, 80, 160, 190], waits.Select(w => w.TotalMilliseconds));
+    }
+
+    [Fact]
     public void Get_reports_a_file_another_program_keeps_open()
     {
         store.Set(Acme, Secret);

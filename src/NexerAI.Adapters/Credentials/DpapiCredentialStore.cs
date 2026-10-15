@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Runtime.Versioning;
 using System.Security.Cryptography;
 using System.Text;
@@ -180,11 +179,14 @@ public sealed class DpapiCredentialStore : ICredentialStore
 
     /// <summary>
     /// Reads the file, or returns <see langword="null"/> when it or its folder is missing. A sharing or lock
-    /// violation is retried with a growing delay for up to <see cref="SharingTimeout"/>, like <c>FileStateStore</c>.
+    /// violation is retried with a growing delay, the last one shortened so the waits add up to exactly
+    /// <see cref="SharingTimeout"/> and the last attempt comes at its end, like <c>FileStateStore</c>. The waits
+    /// are counted rather than the clock, so a busy machine that oversleeps (Windows rounds a 10 ms sleep up to
+    /// about 15.6 ms) still makes every attempt.
     /// </summary>
     private byte[]? Read(string path)
     {
-        var elapsed = Stopwatch.StartNew();
+        var waited = TimeSpan.Zero;
         var delay = TimeSpan.FromMilliseconds(10);
         while (true)
         {
@@ -196,9 +198,12 @@ public sealed class DpapiCredentialStore : ICredentialStore
             {
                 return null;
             }
-            catch (IOException ex) when (ex.HResult is ErrorSharingViolation or ErrorLockViolation && elapsed.Elapsed + delay < SharingTimeout)
+            catch (IOException ex) when (ex.HResult is ErrorSharingViolation or ErrorLockViolation && waited < SharingTimeout)
             {
-                wait(delay);
+                var remaining = SharingTimeout - waited;
+                var next = delay < remaining ? delay : remaining;
+                wait(next);
+                waited += next;
                 delay *= 2;
             }
         }
