@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.Versioning;
 using System.Security.Cryptography;
 using System.Text;
@@ -22,6 +23,13 @@ public sealed class DpapiCredentialStore : ICredentialStore
     /// read the files. It is not a secret.
     /// </summary>
     private const string EntropyPrefix = "nexer-ai credential v1\n";
+
+    private const int ErrorSharingViolation = unchecked((int)0x80070020);
+
+    private const int ErrorLockViolation = unchecked((int)0x80070021);
+
+    /// <summary>How long <see cref="Get"/> retries a file another program holds open, such as an antivirus scan or a concurrent <see cref="Set"/>.</summary>
+    private static readonly TimeSpan SharingTimeout = TimeSpan.FromMilliseconds(500);
 
     private readonly string folder;
 
@@ -48,16 +56,26 @@ public sealed class DpapiCredentialStore : ICredentialStore
 
     /// <inheritdoc />
     /// <exception cref="ArgumentException"><paramref name="trackerUrl"/> is not an absolute http or https address without user info, query or fragment.</exception>
-    /// <exception cref="CredentialStoreException">The file does not decrypt; the message names its path and the file is left untouched.</exception>
+    /// <exception cref="CredentialStoreException">
+    /// The file cannot be read (after retrying for <see cref="SharingTimeout"/> while another program holds it) or
+    /// does not decrypt; the message names its path, never the tracker, and the file is left untouched.
+    /// </exception>
     public string? Get(Uri trackerUrl)
     {
         var key = KeyOf(trackerUrl);
-        byte[] blob;
+        byte[]? blob;
         try
         {
-            blob = File.ReadAllBytes(PathOf(key));
+            blob = Read(PathOf(key));
         }
-        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new CredentialStoreException(
+                $"Cannot read the credential file '{PathOf(key)}': another program keeps it open or the current Windows user cannot read it.",
+                ex);
+        }
+
+        if (blob is null)
         {
             return null;
         }
@@ -149,6 +167,32 @@ public sealed class DpapiCredentialStore : ICredentialStore
 
         var serverAndScheme = trackerUrl.GetComponents(UriComponents.SchemeAndServer, UriFormat.UriEscaped);
         return (serverAndScheme + trackerUrl.AbsolutePath.TrimEnd('/')).ToLowerInvariant();
+    }
+
+    /// <summary>
+    /// Reads the file, or returns <see langword="null"/> when it or its folder is missing. A sharing or lock
+    /// violation is retried with a growing delay for up to <see cref="SharingTimeout"/>, like <c>FileStateStore</c>.
+    /// </summary>
+    private static byte[]? Read(string path)
+    {
+        var elapsed = Stopwatch.StartNew();
+        var delay = TimeSpan.FromMilliseconds(10);
+        while (true)
+        {
+            try
+            {
+                return File.ReadAllBytes(path);
+            }
+            catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+            {
+                return null;
+            }
+            catch (IOException ex) when (ex.HResult is ErrorSharingViolation or ErrorLockViolation && elapsed.Elapsed + delay < SharingTimeout)
+            {
+                Thread.Sleep(delay);
+                delay *= 2;
+            }
+        }
     }
 
     private static byte[] EntropyOf(string key) => Encoding.UTF8.GetBytes(EntropyPrefix + key);
