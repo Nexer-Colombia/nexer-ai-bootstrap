@@ -16,6 +16,8 @@ public sealed class ConsolePrompter : IPrompter
 
     private readonly IConsole console;
 
+    private bool questionsToOutput;
+
     /// <summary>Creates a prompter on the process console.</summary>
     public ConsolePrompter()
         : this(new SystemConsole())
@@ -39,10 +41,10 @@ public sealed class ConsolePrompter : IPrompter
 
         EnsureInteractive(question);
         DiscardPendingKeys();
-        console.Write(question + Environment.NewLine);
+        Say(question + Environment.NewLine);
         for (var i = 0; i < choices.Count; i++)
         {
-            console.Write($"  {i + 1}) {choices[i]}{Environment.NewLine}");
+            Say($"  {i + 1}) {choices[i]}{Environment.NewLine}");
         }
 
         while (true)
@@ -61,7 +63,7 @@ public sealed class ConsolePrompter : IPrompter
                 }
             }
 
-            console.Write("That is not one of the choices." + Environment.NewLine);
+            Say("That is not one of the choices." + Environment.NewLine);
         }
     }
 
@@ -82,7 +84,7 @@ public sealed class ConsolePrompter : IPrompter
                 case "" or "N" or "NO":
                     return false;
                 default:
-                    console.Write("Answer y or n." + Environment.NewLine);
+                    Say("Answer y or n." + Environment.NewLine);
                     break;
             }
         }
@@ -111,7 +113,7 @@ public sealed class ConsolePrompter : IPrompter
             console.TreatControlCAsInput = true;
             while (true)
             {
-                console.Write($"{prompt} (input hidden; Esc cancels): ");
+                Say($"{prompt} (input hidden; Esc cancels): ");
                 string? secret;
                 try
                 {
@@ -119,7 +121,7 @@ public sealed class ConsolePrompter : IPrompter
                 }
                 finally
                 {
-                    console.Write(Environment.NewLine);
+                    Say(Environment.NewLine);
                 }
 
                 if (secret is not null)
@@ -127,7 +129,7 @@ public sealed class ConsolePrompter : IPrompter
                     return secret;
                 }
 
-                console.Write("Nothing was entered. Type or paste the value, or press Esc to cancel." + Environment.NewLine);
+                Say("Nothing was entered. Type or paste the value, or press Esc to cancel." + Environment.NewLine);
             }
         }
         catch (Exception ex) when (ex is InvalidOperationException or IOException)
@@ -224,22 +226,37 @@ public sealed class ConsolePrompter : IPrompter
 
     private string Ask(string prompt)
     {
-        console.Write(prompt);
+        Say(prompt);
         return console.ReadLine()?.Trim() ?? throw new OperationCanceledException("Input ended before an answer.");
     }
 
     private void EnsureInteractive(string question)
     {
-        if (console.IsInputRedirected)
+        if (console.IsInputRedirected || (console.IsErrorRedirected && console.IsOutputRedirected))
         {
             throw Unavailable(question);
+        }
+
+        // Questions go to standard error; when only that is redirected, standard output is where the person reads them.
+        questionsToOutput = console.IsErrorRedirected;
+    }
+
+    private void Say(string text)
+    {
+        if (questionsToOutput)
+        {
+            console.WriteOutput(text);
+        }
+        else
+        {
+            console.Write(text);
         }
     }
 
     private static PromptUnavailableException Unavailable(string question, Exception? innerException = null)
     {
         var message =
-            $"Cannot ask \"{question}\": nexer-ai needs an interactive console, and standard input is redirected or cannot read keys. "
+            $"Cannot ask \"{question}\": nexer-ai needs an interactive console, and standard input or both output streams are redirected, or it cannot read keys. "
             + "Run it in PowerShell or Windows Terminal, or pass the answers as options with --non-interactive.";
         return innerException is null ? new(message) : new(message, innerException);
     }

@@ -112,4 +112,60 @@ public sealed class ConsolePrompterRobustnessTests
         Assert.Equal("token", prompter.ReadSecret(Prompt));
         Assert.True(prompter.Confirm("Install nexer-mod?"));
     }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    public void Questions_go_to_standard_error_unless_only_standard_error_is_redirected(bool outputRedirected, bool errorRedirected)
+    {
+        var console = new FakeConsole { IsOutputRedirected = outputRedirected, IsErrorRedirected = errorRedirected };
+        Script(console);
+
+        Ask(new ConsolePrompter(console));
+
+        Assert.NotEmpty(console.Output);
+        Assert.Empty(console.StandardOutput);
+    }
+
+    [Fact]
+    public void Questions_go_to_standard_output_when_only_standard_error_is_redirected()
+    {
+        var console = new FakeConsole { IsErrorRedirected = true };
+        Script(console);
+
+        Ask(new ConsolePrompter(console));
+
+        Assert.NotEmpty(console.Output);
+        Assert.Equal(console.Output, console.StandardOutput);
+    }
+
+    [Fact]
+    public void Questions_are_refused_when_the_person_cannot_see_either_stream()
+    {
+        var console = new FakeConsole { IsErrorRedirected = true, IsOutputRedirected = true };
+        Script(console);
+        var prompter = new ConsolePrompter(console);
+
+        var choose = Assert.Throws<PromptUnavailableException>(() => prompter.Choose("Role?", ["Developer", "QA"]));
+        Assert.Throws<PromptUnavailableException>(() => prompter.Confirm("Install nexer-mod?"));
+        Assert.Throws<PromptUnavailableException>(() => prompter.ReadSecret(Prompt));
+
+        Assert.Contains("--non-interactive", choose.Message, StringComparison.Ordinal);
+        Assert.Empty(console.Output);
+        Assert.Empty(console.ControlCSettings);
+    }
+
+    private static void Script(FakeConsole console)
+    {
+        console.Lines.Enqueue("2");
+        console.Lines.Enqueue("y");
+        console.Type("token\r");
+    }
+
+    private static void Ask(ConsolePrompter prompter)
+    {
+        prompter.ReadSecret(Prompt);
+        prompter.Choose("Role?", ["Developer", "QA"]);
+        prompter.Confirm("Install nexer-mod?");
+    }
 }
