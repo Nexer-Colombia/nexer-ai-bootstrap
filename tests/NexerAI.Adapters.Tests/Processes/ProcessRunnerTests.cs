@@ -78,8 +78,9 @@ public sealed class ProcessRunnerTests : IDisposable
         using var cancel = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         cancel.CancelAfter(TimeSpan.FromMilliseconds(200));
 
+        // Not the temporary folder: a killed process can hold its working directory for a moment, failing the cleanup.
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            () => runner.RunAsync("cmd.exe", ["/c", "ping -n 30 127.0.0.1 >nul"], folder.Path, cancel.Token));
+            () => runner.RunAsync("cmd.exe", ["/c", "ping -n 30 127.0.0.1 >nul"], Environment.SystemDirectory, cancel.Token));
     }
 
     [Fact]
@@ -90,6 +91,6 @@ public sealed class ProcessRunnerTests : IDisposable
 
         // The program may or may not have exited when the runner kills it; either way the cancellation surfaces.
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            () => runner.RunAsync("cmd.exe", ["/c", "exit 0"], folder.Path, cancel.Token));
+            () => runner.RunAsync("cmd.exe", ["/c", "exit 0"], Environment.SystemDirectory, cancel.Token));
     }
 }
