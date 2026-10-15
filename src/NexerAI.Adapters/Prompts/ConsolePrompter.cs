@@ -121,7 +121,7 @@ public sealed class ConsolePrompter : IPrompter
                 }
                 finally
                 {
-                    Say(Environment.NewLine);
+                    EndLine();
                 }
 
                 if (secret is not null)
@@ -218,9 +218,9 @@ public sealed class ConsolePrompter : IPrompter
         {
             console.TreatControlCAsInput = controlCAsInput;
         }
-        catch (IOException)
+        catch (Exception ex) when (ex is InvalidOperationException or IOException)
         {
-            // The console went away; there is nothing left to restore.
+            // The console went away; there is nothing left to restore, and the outcome stands.
         }
     }
 
@@ -239,6 +239,19 @@ public sealed class ConsolePrompter : IPrompter
 
         // Questions go to standard error; when only that is redirected, standard output is where the person reads them.
         questionsToOutput = console.IsErrorRedirected;
+    }
+
+    /// <summary>Ends the line after the hidden input; a console that went away must not replace the secret or the cancel.</summary>
+    private void EndLine()
+    {
+        try
+        {
+            Say(Environment.NewLine);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or IOException)
+        {
+            // Only the line break is lost.
+        }
     }
 
     private void Say(string text)

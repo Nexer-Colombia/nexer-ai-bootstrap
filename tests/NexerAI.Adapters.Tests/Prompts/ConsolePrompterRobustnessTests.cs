@@ -168,4 +168,48 @@ public sealed class ConsolePrompterRobustnessTests
         prompter.Choose("Role?", ["Developer", "QA"]);
         prompter.Confirm("Install nexer-mod?");
     }
+
+    [Theory]
+    [InlineData(typeof(InvalidOperationException))]
+    [InlineData(typeof(IOException))]
+    public void A_failing_line_break_after_the_secret_does_not_replace_the_secret(Type exceptionType)
+    {
+        var console = new FakeConsole { FailingWrite = Environment.NewLine, WriteException = (Exception)Activator.CreateInstance(exceptionType, "Closed.")! };
+        console.Type("token\r");
+
+        Assert.Equal("token", new ConsolePrompter(console).ReadSecret(Prompt));
+        Assert.Equal([true, false], console.ControlCSettings);
+    }
+
+    [Fact]
+    public void A_failing_line_break_after_a_cancel_does_not_replace_the_cancel()
+    {
+        var console = new FakeConsole { FailingWrite = Environment.NewLine, WriteException = new IOException("Closed.") };
+        console.Type("half").Press(ConsoleKey.Escape, '\x1b');
+
+        Assert.Throws<OperationCanceledException>(() => new ConsolePrompter(console).ReadSecret(Prompt));
+        Assert.Equal([true, false], console.ControlCSettings);
+    }
+
+    [Theory]
+    [InlineData(typeof(InvalidOperationException))]
+    [InlineData(typeof(IOException))]
+    public void A_failing_restore_of_ctrl_c_handling_does_not_replace_the_secret(Type exceptionType)
+    {
+        var console = new FakeConsole { RestoreException = (Exception)Activator.CreateInstance(exceptionType, "Console gone.")! };
+        console.Type("token\r");
+
+        Assert.Equal("token", new ConsolePrompter(console).ReadSecret(Prompt));
+    }
+
+    [Theory]
+    [InlineData(typeof(InvalidOperationException))]
+    [InlineData(typeof(IOException))]
+    public void A_failing_restore_of_ctrl_c_handling_does_not_replace_a_cancel(Type exceptionType)
+    {
+        var console = new FakeConsole { RestoreException = (Exception)Activator.CreateInstance(exceptionType, "Console gone.")! };
+        console.Type("half").Press(ConsoleKey.Escape, '\x1b');
+
+        Assert.Throws<OperationCanceledException>(() => new ConsolePrompter(console).ReadSecret(Prompt));
+    }
 }
