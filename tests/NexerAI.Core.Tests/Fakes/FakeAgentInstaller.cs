@@ -56,6 +56,9 @@ public sealed class FakeAgentInstaller : IAgentInstaller
     /// <summary>When set, the first change whose call text starts with it throws <see cref="AgentStateException"/> before it happens.</summary>
     public string? FailOnce { get; set; }
 
+    /// <summary>Runs when <see cref="FailOnce"/> fires, before the failure is thrown: what happens meanwhile, such as another process.</summary>
+    public Action? OnFailOnce { get; set; }
+
     /// <summary>The fake of <paramref name="folder"/>, created with the local-scope plugins given.</summary>
     public FakeAgentInstaller WithFolder(string folder, params InstalledPlugin[] plugins)
     {
@@ -167,6 +170,7 @@ public sealed class FakeAgentInstaller : IAgentInstaller
         if (root.FailOnce is { } prefix && text.StartsWith(prefix, StringComparison.Ordinal))
         {
             root.FailOnce = null;
+            root.OnFailOnce?.Invoke();
             throw new AgentStateException($"Injected failure: {text}");
         }
 
