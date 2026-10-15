@@ -237,6 +237,28 @@ public sealed class ChannelSwitcherTests
     }
 
     [Fact]
+    public async Task A_failure_of_the_pending_switch_that_another_run_finished_meanwhile_is_reported_and_does_not_restore_the_old_channel()
+    {
+        store.State = store.State with { Switch = new ChannelSwitch(Channel.Stable, Channel.Early, []) };
+        agent.FailOnce = "marketplace autoUpdate nexer-early";
+        agent.OnFailOnce = () =>
+        {
+            // Another nexer-ai process finishes the same switch while this run fails for an unrelated reason.
+            agent.Marketplaces.Clear();
+            agent.Marketplaces.Add(new RegisteredMarketplace("nexer-early", "github", Channel.Early.Repository, null));
+            agent.Installed.Clear();
+            agent.Installed.AddRange([User("nexer-core", "nexer-early"), User("nexer-qa", "nexer-early")]);
+            store.State = store.State with { Channel = Channel.Early, Switch = null };
+        };
+
+        await Assert.ThrowsAsync<AgentStateException>(() => ChannelSwitcher.SwitchAsync(agent, store, Channel.Stable, Ct));
+
+        Assert.DoesNotContain(agent.Calls, c => c.EndsWith(Channel.Stable.Repository, StringComparison.Ordinal));
+        Assert.Equal(["nexer-early"], agent.Marketplaces.Select(m => m.Name));
+        Assert.Equal((Channel.Early, (ChannelSwitch?)null), (store.State.Channel, store.State.Switch));
+    }
+
+    [Fact]
     public async Task SwitchAsync_back_to_the_old_channel_after_an_interruption_in_the_middle_of_the_move_ends_on_the_old_channel()
     {
         agent.Installed[1] = User("nexer-qa", "nexer", enabled: false);

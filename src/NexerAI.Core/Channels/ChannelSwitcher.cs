@@ -1,3 +1,4 @@
+using System.Runtime.ExceptionServices;
 using NexerAI.Core.Domain;
 using NexerAI.Core.Planning;
 using NexerAI.Core.Ports;
@@ -44,23 +45,24 @@ public static class ChannelSwitcher
         ArgumentNullException.ThrowIfNull(stateStore);
         ArgumentNullException.ThrowIfNull(target);
 
-        var pendingBefore = (await stateStore.ReadAsync(ct).ConfigureAwait(false)).Switch;
-        bool resumed;
-        try
+        var resumed = false;
+        if ((await stateStore.ReadAsync(ct).ConfigureAwait(false)).Switch is { } pending)
         {
-            resumed = await ResumeAsync(installer, stateStore, ct).ConfigureAwait(false);
-        }
-        catch (AgentStateException) when (pendingBefore is not null && pendingBefore.From == target && pendingBefore.To != target)
-        {
-            if ((await stateStore.ReadAsync(ct).ConfigureAwait(false)).Switch is not null)
+            if (await FinishAsync(installer, stateStore, pending, ct).ConfigureAwait(false) is { } refusal)
             {
-                throw; // Kept for a rerun: something moved, or the failure was not the refusal.
+                if (pending.From != target)
+                {
+                    ExceptionDispatchInfo.Throw(refusal);
+                }
+
+                // This run dropped the pending switch as refused before anything moved; the person only asked for the
+                // channel they are on, so there is nothing to report: keep its registration and auto-update right.
+                // Any other failure was thrown, so a switch another run finished meanwhile is never undone here.
+                await ChannelRegistration.EnsureAsync(installer, target, ct).ConfigureAwait(false);
+                return false;
             }
 
-            // The pending switch was refused before anything moved and is dropped; the person only asked for the
-            // channel they are on, so there is nothing to report: keep its registration and auto-update right.
-            await ChannelRegistration.EnsureAsync(installer, target, ct).ConfigureAwait(false);
-            return false;
+            resumed = true;
         }
 
         var state = await stateStore.ReadAsync(ct).ConfigureAwait(false);
@@ -85,7 +87,11 @@ public static class ChannelSwitcher
         var recorded = await stateStore.UpdateAsync(
             current => current.Switch is null ? current with { Switch = new ChannelSwitch(from, target, personDisabled) } : current, ct)
             .ConfigureAwait(false);
-        await FinishAsync(installer, stateStore, recorded.Switch!, ct).ConfigureAwait(false);
+        if (await FinishAsync(installer, stateStore, recorded.Switch!, ct).ConfigureAwait(false) is { } refused)
+        {
+            ExceptionDispatchInfo.Throw(refused);
+        }
+
         return true;
     }
 
@@ -106,27 +112,37 @@ public static class ChannelSwitcher
             return false;
         }
 
-        await FinishAsync(installer, stateStore, pending, ct).ConfigureAwait(false);
+        if (await FinishAsync(installer, stateStore, pending, ct).ConfigureAwait(false) is { } refused)
+        {
+            ExceptionDispatchInfo.Throw(refused);
+        }
+
         return true;
     }
 
     /// <summary>Steps 2 to 5: register the new marketplace, move the plugins, remove the old marketplace, clear the switch.</summary>
-    private static async Task FinishAsync(IAgentInstaller installer, IStateStore stateStore, ChannelSwitch pending, CancellationToken ct)
+    /// <returns>
+    /// <see langword="null"/> when the switch is finished; the refusal when this run dropped the switch because the new
+    /// marketplace's registration was refused before any plugin was touched. The caller decides whether to report it.
+    /// </returns>
+    /// <exception cref="AgentStateException">Any other failed step; the switch stays recorded.</exception>
+    private static async Task<AgentStateException?> FinishAsync(IAgentInstaller installer, IStateStore stateStore, ChannelSwitch pending, CancellationToken ct)
     {
         try
         {
             await ChannelRegistration.EnsureAsync(installer, pending.To, ct).ConfigureAwait(false);
         }
-        catch (AgentStateException)
+        catch (AgentStateException refusal)
         {
-            // Nothing changed, and the pending switch would make every later run, even one that stays on the current
-            // channel, fail with the same refusal: drop it. A rerun toward the same target records it again.
-            if (await RegistrationRefusedBeforeAnyMoveAsync(installer, pending, ct).ConfigureAwait(false))
+            if (!await RegistrationRefusedBeforeAnyMoveAsync(installer, pending, ct).ConfigureAwait(false))
             {
-                await stateStore.UpdateAsync(current => current with { Switch = null }, ct).ConfigureAwait(false);
+                throw;
             }
 
-            throw;
+            // Nothing changed, and the pending switch would make every later run, even one that stays on the current
+            // channel, fail with the same refusal: drop it. A rerun toward the same target records it again.
+            await stateStore.UpdateAsync(current => current with { Switch = null }, ct).ConfigureAwait(false);
+            return refusal;
         }
 
         // Step 3: user scope first, then the local scope of each folder, each read from its own folder.
@@ -148,6 +164,7 @@ public static class ChannelSwitcher
 
         // Step 5.
         await stateStore.UpdateAsync(current => current with { Channel = pending.To, Switch = null }, ct).ConfigureAwait(false);
+        return null;
     }
 
     /// <summary>
