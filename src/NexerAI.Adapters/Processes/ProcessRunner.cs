@@ -27,8 +27,8 @@ public sealed class ProcessRunner : IProcessRunner
     /// <summary>
     /// What a batch file argument may hold from ASCII: letters, digits, <c>@._:/\=+,-</c> and the space. A space makes
     /// <see cref="Process"/> quote the argument, so a per-user path such as <c>C:/Users/Ana Maria/...</c> stays one
-    /// argument; none of the other characters needs quoting. Beyond ASCII only letters and digits are allowed
-    /// (<c>C:/Users/María/...</c>): punctuation and symbols are refused because a console codepage can map
+    /// argument; none of the other characters needs quoting. Beyond ASCII only the Latin letters of <see cref="IsLatinLetter"/> are allowed
+    /// (<c>C:/Users/María/...</c>): other letters, punctuation and symbols are refused because a console codepage can map
     /// them to syntax characters (fullwidth <c>＂</c> to a quote, <c>％</c> to <c>%</c>).
     /// </summary>
     private static readonly SearchValues<char> BatchArgumentCharacters =
@@ -72,30 +72,33 @@ public sealed class ProcessRunner : IProcessRunner
         }
 
         using var process = Process.Start(startInfo)!;
-        if (standardInput is not null)
-        {
-            // A program that exits without reading its input closes the pipe: that is not an error here.
-            try
-            {
-                await process.StandardInput.WriteAsync(standardInput.AsMemory(), CancellationToken.None).ConfigureAwait(false);
-            }
-            catch (IOException)
-            {
-            }
-        }
 
-        try
-        {
-            process.StandardInput.Close(); // Nothing more to answer: a prompt reads end of input instead of waiting.
-        }
-        catch (IOException)
-        {
-        }
-
+        // Drain both outputs before writing any input: a program that echoes while it reads would otherwise block on a
+        // full output pipe while this side blocks on a full input pipe.
         var output = process.StandardOutput.ReadToEndAsync(CancellationToken.None);
         var error = process.StandardError.ReadToEndAsync(CancellationToken.None);
         try
         {
+            if (standardInput is not null)
+            {
+                // A program that exits without reading its input closes the pipe: that is not an error here.
+                try
+                {
+                    await process.StandardInput.WriteAsync(standardInput.AsMemory(), ct).ConfigureAwait(false);
+                }
+                catch (IOException)
+                {
+                }
+            }
+
+            try
+            {
+                process.StandardInput.Close(); // Nothing more to answer: a prompt reads end of input instead of waiting.
+            }
+            catch (IOException)
+            {
+            }
+
             await process.WaitForExitAsync(ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
@@ -122,7 +125,7 @@ public sealed class ProcessRunner : IProcessRunner
             throw new ArgumentException($"The batch file '{fileName}' cannot be run safely: it must be a full path without % ! \" & | < > or ^.", nameof(fileName));
         }
 
-        if (workingDirectory.StartsWith(@"\\", StringComparison.Ordinal) || workingDirectory.StartsWith("//", StringComparison.Ordinal))
+        if (IsUncPath(workingDirectory))
         {
             throw new ArgumentException(
                 $"The batch file '{fileName}' cannot run in the UNC working directory '{workingDirectory}': cmd.exe would run it in the Windows folder instead. Use a drive path.", nameof(workingDirectory));
@@ -137,11 +140,15 @@ public sealed class ProcessRunner : IProcessRunner
         }
     }
 
+    /// <summary>Windows reads a path that starts with two separators of either kind as a UNC path (<c>\\server</c>, <c>//server</c>, <c>\/server</c>).</summary>
+    private static bool IsUncPath(string path) =>
+        path.Length >= 2 && path[0] is '\\' or '/' && path[1] is '\\' or '/';
+
     private static bool IsSafeBatchArgument(string argument)
     {
         foreach (var character in argument)
         {
-            if (!BatchArgumentCharacters.Contains(character) && !(character > 127 && char.IsLetterOrDigit(character)))
+            if (!BatchArgumentCharacters.Contains(character) && !IsLatinLetter(character))
             {
                 return false;
             }
@@ -149,6 +156,16 @@ public sealed class ProcessRunner : IProcessRunner
 
         return true;
     }
+
+    /// <summary>
+    /// The letters of Latin-1 Supplement and Latin Extended-A (<c>á é ñ ü ç ë Ł ő ...</c>), which cover names in Spanish and
+    /// the languages of the program's clients, minus the multiplication and division signs. Checked with
+    /// <c>WideCharToMultiByte</c> (best-fit) on code pages 437, 850 and 1252: each maps to a letter, <c>_</c> or <c>?</c>,
+    /// never to syntax. A general "any letter" test is not enough: <c>U+01C3</c> maps to <c>!</c>, <c>U+02BA</c> to a
+    /// quote and <c>U+02C6</c> to <c>^</c>, all of them letters.
+    /// </summary>
+    private static bool IsLatinLetter(char character) =>
+        character is >= '\u00C0' and <= '\u017F' and not '\u00D7' and not '\u00F7';
 
     /// <summary>
     /// Kills the process tree on cancellation without hiding the cancellation: <see cref="Process.Kill(bool)"/>
