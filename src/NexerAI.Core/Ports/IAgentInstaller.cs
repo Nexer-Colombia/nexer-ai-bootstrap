@@ -19,4 +19,20 @@ public interface IAgentInstaller
 
     /// <summary>Registers an MCP server at the requested scope.</summary>
     Task AddMcpServerAsync(McpServerRegistration registration, CancellationToken ct);
+
+    /// <summary>Returns the plugin marketplaces the agent has registered.</summary>
+    Task<IReadOnlyList<RegisteredMarketplace>> GetMarketplacesAsync(CancellationToken ct);
+
+    /// <summary>
+    /// Registers the marketplace of <paramref name="channel"/> for the current user, from <see cref="Channel.Repository"/>.
+    /// Callers check <see cref="GetMarketplacesAsync"/> first and never add a registered marketplace again
+    /// (see <see cref="Channels.ChannelRegistration"/>).
+    /// </summary>
+    Task AddMarketplaceAsync(Channel channel, CancellationToken ct);
+
+    /// <summary>
+    /// Makes the agent keep the marketplace of <paramref name="channel"/> and its plugins up to date by itself; does
+    /// nothing when it already does.
+    /// </summary>
+    Task EnableMarketplaceAutoUpdateAsync(Channel channel, CancellationToken ct);
 }
