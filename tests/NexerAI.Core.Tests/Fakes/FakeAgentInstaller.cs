@@ -52,4 +52,27 @@ public sealed class FakeAgentInstaller : IAgentInstaller
         Calls.Add($"marketplace autoUpdate {channel.Name}");
         return Task.CompletedTask;
     }
+
+    public IAgentInstaller ForFolder(string folder) => this;
+
+    public Task<IReadOnlyList<string>> GetPluginFoldersAsync(CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<string>>([]);
+
+    public Task DisablePluginAsync(string name, string marketplace, PluginScope scope, CancellationToken ct)
+    {
+        Calls.Add($"disable {name}@{marketplace} --scope {scope}");
+        return Task.CompletedTask;
+    }
+
+    public Task UninstallPluginAsync(string name, string marketplace, PluginScope scope, CancellationToken ct)
+    {
+        Calls.Add($"uninstall {name}@{marketplace} --scope {scope}");
+        return Task.CompletedTask;
+    }
+
+    public Task RemoveMarketplaceAsync(string name, CancellationToken ct)
+    {
+        Calls.Add($"marketplace remove {name}");
+        return Task.CompletedTask;
+    }
 }

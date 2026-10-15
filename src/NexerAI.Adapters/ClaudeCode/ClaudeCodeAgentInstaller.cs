@@ -83,6 +83,103 @@ public sealed class ClaudeCodeAgentInstaller : IAgentInstaller
         Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR"), Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
 
     /// <inheritdoc />
+    /// <remarks>Shares the process runner, files and search path; only the working directory differs.</remarks>
+    /// <exception cref="ArgumentException"><paramref name="folder"/> is not an absolute drive or UNC path.</exception>
+    public IAgentInstaller ForFolder(string folder) =>
+        new ClaudeCodeAgentInstaller(processRunner, fileSystem, configFile, settingsFile.FilePath, folder, searchPath);
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// Reads the <c>projectPath</c> of local entries of <c>claude plugin list --json</c>, which lists the local plugins
+    /// of every folder (observed on 2.1.300 and 2.1.301). A folder that no longer exists is left out: <c>claude</c>
+    /// cannot run there, and removing the marketplace uninstalls its plugins anyway.
+    /// </remarks>
+    /// <exception cref="AgentStateException"><c>claude</c> is not on <c>PATH</c>, cannot be started, fails, or prints output that is not recognized.</exception>
+    public async Task<IReadOnlyList<string>> GetPluginFoldersAsync(CancellationToken ct)
+    {
+        var result = await RunClaudeAsync(["plugin", "list", "--json"], ct).ConfigureAwait(false);
+        return result.ExitCode == 0
+            ? [.. ClaudePluginList.LocalFolders(result.StandardOutput).Where(fileSystem.DirectoryExists)]
+            : throw new AgentStateException($"'claude plugin list --json' exited with code {result.ExitCode}.");
+    }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// Runs <c>claude plugin disable &lt;name&gt;@&lt;marketplace&gt; --scope &lt;scope&gt; --json</c>
+    /// (https://code.claude.com/docs/en/plugins/cli-reference#plugin-disable). An already disabled plugin fails with
+    /// <c>already_in_goal_state</c>, which counts as done.
+    /// </remarks>
+    /// <exception cref="AgentStateException"><c>claude</c> cannot be run, or the command fails otherwise; the message names the plugin and the failure code, never the output.</exception>
+    public Task DisablePluginAsync(string name, string marketplace, PluginScope scope, CancellationToken ct) =>
+        RunResultCommandAsync(["plugin", "disable", PluginId(name, marketplace), "--scope", ScopeName(scope), "--json"], "disable the plugin", PluginId(name, marketplace), ["already_in_goal_state"], ct);
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// Runs <c>claude plugin uninstall &lt;name&gt;@&lt;marketplace&gt; --scope &lt;scope&gt; --json</c>
+    /// (https://code.claude.com/docs/en/plugins/cli-reference#plugin-uninstall), which also deletes the plugin's data when
+    /// it is the last scope. Counted as done: <c>not_installed_at_scope</c> (installed at another scope only) and
+    /// <c>not_installed</c> (installed nowhere), both observed on 2.1.301.
+    /// </remarks>
+    /// <exception cref="AgentStateException"><c>claude</c> cannot be run, or the command fails otherwise; the message names the plugin and the failure code, never the output.</exception>
+    public Task UninstallPluginAsync(string name, string marketplace, PluginScope scope, CancellationToken ct) =>
+        RunResultCommandAsync(["plugin", "uninstall", PluginId(name, marketplace), "--scope", ScopeName(scope), "--json"], "uninstall the plugin", PluginId(name, marketplace), ["not_installed_at_scope", "not_installed"], ct);
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// Runs <c>claude plugin marketplace remove &lt;name&gt; --scope user --json</c>
+    /// (https://code.claude.com/docs/en/plugins/cli-reference#plugin-marketplace-remove). A marketplace that is not
+    /// registered fails with <c>not_configured</c> (observed on 2.1.301), which counts as done.
+    /// </remarks>
+    /// <exception cref="AgentStateException"><c>claude</c> cannot be run, or the command fails otherwise; the message names the marketplace and the failure code, never the output.</exception>
+    public Task RemoveMarketplaceAsync(string name, CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(name);
+        return RunResultCommandAsync(["plugin", "marketplace", "remove", name, "--scope", "user", "--json"], "remove the marketplace", name, ["not_configured"], ct);
+    }
+
+    /// <summary>
+    /// Runs a command that prints a <c>--json</c> result line. A <c>failed</c> result with one of
+    /// <paramref name="doneCodes"/> means its work was already done and returns; any other <c>failed</c> result, another
+    /// exit code than 0 or no result line throws. Messages name <paramref name="target"/>, never the output.
+    /// </summary>
+    private async Task RunResultCommandAsync(
+        IReadOnlyList<string> arguments, string action, string target, IReadOnlyList<string> doneCodes, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+
+        var result = await RunClaudeAsync(arguments, ct).ConfigureAwait(false);
+        var outcome = ClaudePluginResult.Parse(result.StandardOutput);
+        if (outcome is { Succeeded: false })
+        {
+            if (outcome.FailureCode is { } doneCode && doneCodes.Contains(doneCode))
+            {
+                return;
+            }
+
+            var code = outcome.FailureCode is { } failureCode ? $" (failure code {failureCode})" : string.Empty;
+            throw new AgentStateException($"Claude Code could not {action} {target}{code}.");
+        }
+
+        var command = $"claude {string.Join(' ', arguments.Take(arguments.Count - 1))}";
+        if (result.ExitCode != 0)
+        {
+            throw new AgentStateException($"'{command}' exited with code {result.ExitCode}.");
+        }
+
+        if (outcome is null)
+        {
+            throw new AgentStateException($"The output of '{command} --json' has no result line; this version of nexer-ai does not recognize it.");
+        }
+    }
+
+    private static string PluginId(string name, string marketplace)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(name);
+        ArgumentException.ThrowIfNullOrEmpty(marketplace);
+        return $"{name}@{marketplace}";
+    }
+
+    /// <inheritdoc />
     /// <exception cref="AgentStateException"><c>claude</c> is not on <c>PATH</c>, cannot be started, fails, or prints output that is not recognized.</exception>
     public async Task<IReadOnlyList<InstalledPlugin>> GetInstalledPluginsAsync(CancellationToken ct)
     {
