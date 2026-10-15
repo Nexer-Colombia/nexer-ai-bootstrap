@@ -13,7 +13,10 @@ public interface IProcessRunner
     /// </param>
     /// <param name="arguments">Each argument as one item, quoted by the runner.</param>
     /// <param name="workingDirectory">An absolute folder.</param>
-    /// <param name="ct">Cancels the wait and kills the process tree.</param>
+    /// <param name="ct">
+    /// Cancels the wait and kills the process tree; the cancellation surfaces once the tree has exited and released
+    /// the working directory, or after a few seconds if part of it could not be killed.
+    /// </param>
     /// <param name="standardInput">
     /// Text written to the program's standard input as UTF-8 without a byte order mark, then closed; <see langword="null"/>
     /// for none. How to pass values that must stay off the command line.

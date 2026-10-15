@@ -42,6 +42,9 @@ public sealed class ProcessRunner : IProcessRunner
 
     private static readonly UTF8Encoding Utf8 = new(encoderShouldEmitUTF8Identifier: false);
 
+    /// <summary>How long a cancelled run waits for the killed process tree to exit before it throws anyway.</summary>
+    private static readonly TimeSpan KillGrace = TimeSpan.FromSeconds(5);
+
     /// <inheritdoc />
     public async Task<ProcessResult> RunAsync(
         string fileName, IReadOnlyList<string> arguments, string workingDirectory, CancellationToken ct, string? standardInput = null)
@@ -104,6 +107,7 @@ public sealed class ProcessRunner : IProcessRunner
         catch (OperationCanceledException)
         {
             TryKill(process);
+            await WaitForKilledTreeAsync(process, output, error).ConfigureAwait(false);
             throw;
         }
 
@@ -180,6 +184,24 @@ public sealed class ProcessRunner : IProcessRunner
         catch (Exception ex) when (ex is InvalidOperationException or AggregateException or System.ComponentModel.Win32Exception)
         {
             // Best effort: the caller asked to stop waiting, and that is what it is told.
+        }
+    }
+
+    /// <summary>
+    /// Waits up to <see cref="KillGrace"/> for the killed tree to go away: <c>TerminateProcess</c> only starts the
+    /// termination, and until a process has exited it still holds its working directory and open files, so a caller
+    /// that deletes the folder right after the cancellation would fail. The root is waited for directly; its children
+    /// (<c>ping.exe</c> under <c>cmd.exe</c>) inherited the output pipes, which close when the last of them has exited.
+    /// </summary>
+    private static async Task WaitForKilledTreeAsync(Process process, Task output, Task error)
+    {
+        try
+        {
+            await Task.WhenAll(process.WaitForExitAsync(CancellationToken.None), output, error).WaitAsync(KillGrace).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is TimeoutException or IOException)
+        {
+            // A part of the tree that could not be killed keeps running: the cancellation still surfaces.
         }
     }
 }
