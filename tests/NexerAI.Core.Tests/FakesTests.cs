@@ -60,7 +60,7 @@ public sealed class FakesTests
     {
         var installer = new FakeAgentInstaller
         {
-            Installed = [new InstalledPlugin("nexer-core", "nexer", "1.2.0", PluginScope.User)],
+            Installed = [new InstalledPlugin("nexer-core", "nexer", "1.2.0", PluginScope.User, Enabled: true)],
             InstalledMcpServers = [new InstalledMcpServer("nexer-testrail", PluginScope.Local)],
         };
         var install = new PluginInstallRequest("nexer-qa", "nexer", PluginScope.User, new Dictionary<string, string>());

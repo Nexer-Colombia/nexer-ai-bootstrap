@@ -23,9 +23,9 @@ public static class InstallPlanner
     /// <summary>
     /// Returns the actions that bring the actual state to <paramref name="desired"/>, each desired entry once.
     /// A plugin is present when one with the same name, marketplace and scope is installed, whatever its
-    /// version (updates come from marketplace auto-update); an MCP server when one with the same name and
-    /// scope exists. Names compare ordinally. Order: user-scope plugins (<c>nexer-core</c> first, then by
-    /// name), local-scope plugins by name, then MCP servers by name.
+    /// version (updates come from marketplace auto-update) and even when disabled; an MCP server when one
+    /// with the same name and scope exists. Names compare ordinally. Order: user-scope plugins
+    /// (<c>nexer-core</c> first, then by name), local-scope plugins by name, then MCP servers by name.
     /// </summary>
     /// <remarks>Nothing is removed: plugins and servers the desired state does not list are left alone.</remarks>
     public static IReadOnlyList<PlanAction> Plan(

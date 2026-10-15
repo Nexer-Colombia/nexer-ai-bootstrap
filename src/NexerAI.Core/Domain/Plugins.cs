@@ -11,7 +11,11 @@ public enum PluginScope
 }
 
 /// <summary>A plugin as reported by the agent; Claude Code identifies it as <c>Name@Marketplace</c>.</summary>
-public sealed record InstalledPlugin(string Name, string Marketplace, string Version, PluginScope Scope);
+/// <param name="Enabled">
+/// Whether the agent loads it. A disabled plugin still counts as installed and is left alone (design 4.4):
+/// installing it again would enable it, and <c>doctor</c> reports it instead.
+/// </param>
+public sealed record InstalledPlugin(string Name, string Marketplace, string Version, PluginScope Scope, bool Enabled);
 
 /// <summary>
 /// A plugin to install from a marketplace (the channel name, see <see cref="Channel.Name"/>),

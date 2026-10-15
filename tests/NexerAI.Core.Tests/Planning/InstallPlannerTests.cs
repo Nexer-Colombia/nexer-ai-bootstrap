@@ -48,9 +48,9 @@ public sealed class InstallPlannerTests
         var desired = new DesiredState([Core, Umbraco], [Jira]);
         InstalledPlugin[] plugins =
         [
-            new("nexer-dev-umbraco", "nexer", "0.1.0", PluginScope.Local),
-            new("nexer-core", "nexer", "9.9.9", PluginScope.User),
-            new("nexer-other", "nexer", "1.0.0", PluginScope.User),
+            new("nexer-dev-umbraco", "nexer", "0.1.0", PluginScope.Local, Enabled: true),
+            new("nexer-core", "nexer", "9.9.9", PluginScope.User, Enabled: true),
+            new("nexer-other", "nexer", "1.0.0", PluginScope.User, Enabled: true),
         ];
 
         var plan = InstallPlanner.Plan(desired, plugins, [new("nexer-jira", PluginScope.Local), new("github", PluginScope.User)]);
@@ -65,9 +65,22 @@ public sealed class InstallPlannerTests
     [InlineData("nexer-core", "Nexer", PluginScope.User)]
     public void Plan_installs_a_plugin_installed_under_another_name_marketplace_or_scope(string name, string marketplace, PluginScope scope)
     {
-        var plan = InstallPlanner.Plan(new DesiredState([Core], []), [new(name, marketplace, "1.0.0", scope)], []);
+        var plan = InstallPlanner.Plan(new DesiredState([Core], []), [new(name, marketplace, "1.0.0", scope, Enabled: true)], []);
 
         Assert.Equal([new PlanAction.InstallPlugin(Core)], plan);
+    }
+
+    [Fact]
+    public void Plan_leaves_a_disabled_plugin_alone()
+    {
+        // Owner decision 2026-10-15 (design 4.4): installing a disabled plugin would silently enable it again.
+        InstalledPlugin[] plugins =
+        [
+            new("nexer-core", "nexer", "1.0.0", PluginScope.User, Enabled: false),
+            new("nexer-dev-umbraco", "nexer", "1.0.0", PluginScope.Local, Enabled: false),
+        ];
+
+        Assert.Empty(InstallPlanner.Plan(new DesiredState([Core, Umbraco], []), plugins, []));
     }
 
     [Fact]
@@ -105,7 +118,7 @@ public sealed class InstallPlannerTests
     {
         var installer = new FakeAgentInstaller
         {
-            Installed = [new InstalledPlugin("nexer-core", "nexer", "1.2.0", PluginScope.User)],
+            Installed = [new InstalledPlugin("nexer-core", "nexer", "1.2.0", PluginScope.User, Enabled: true)],
             InstalledMcpServers = [new InstalledMcpServer("nexer-jira", PluginScope.Local)],
         };
         var ct = TestContext.Current.CancellationToken;
