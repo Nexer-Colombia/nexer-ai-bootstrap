@@ -9,20 +9,39 @@ namespace NexerAI.Adapters.ClaudeCode;
 /// same folder, flushed to disk and moved over the file, so a crash never leaves it half written. Claude Code holds no
 /// lock and rewrites the whole file when it saves a setting, so the file is read again just before the move, and a
 /// change made meanwhile is not overwritten: the update starts again from the new text. A write by Claude Code between
-/// that check and the move can still be lost; the window is a few milliseconds.
+/// that check and the move can still be lost; the window is a few milliseconds. The text must be valid UTF-8: a file
+/// that is not (for example one saved in an ANSI code page) is refused and left alone, because decoding it leniently
+/// would write replacement characters over the person's values. When the file is a symbolic link (dotfiles setups) the
+/// update goes to the file the link points at, so the link stays; a hard link cannot be detected portably and is
+/// replaced by a regular file, as is any file replaced by a move.
 /// </summary>
 public sealed class ClaudeSettingsFile
 {
     private const int MaxAttempts = 3;
 
+    private readonly Func<string, string?> resolveLink;
+
     private static readonly UTF8Encoding Utf8NoBom = new(encoderShouldEmitUTF8Identifier: false);
+
+    private static readonly UTF8Encoding StrictUtf8 = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
 
     private static readonly TimeSpan RetryDelay = TimeSpan.FromMilliseconds(50);
 
     /// <summary>Creates the file wrapper.</summary>
     /// <param name="filePath">Absolute path of the file, usually from <see cref="ClaudeSettings.FilePath"/>.</param>
     public ClaudeSettingsFile(string filePath)
+        : this(filePath, FinalLinkTarget)
     {
+    }
+
+    /// <summary>Creates the file wrapper with another way to find where a symbolic link points; tests use it.</summary>
+    /// <param name="filePath">Absolute path of the file.</param>
+    /// <param name="resolveLink">Returns the path a symbolic link finally points at, or <see langword="null"/> when the path is not a link.</param>
+    internal ClaudeSettingsFile(string filePath, Func<string, string?> resolveLink)
+    {
+        ArgumentNullException.ThrowIfNull(resolveLink);
+        this.resolveLink = resolveLink;
+
         ArgumentNullException.ThrowIfNull(filePath);
         if (!Path.IsPathFullyQualified(filePath))
         {
@@ -36,15 +55,15 @@ public sealed class ClaudeSettingsFile
     public string FilePath { get; }
 
     /// <summary>
-    /// Reads the text (UTF-8, a byte order mark dropped; <see langword="null"/> when the file does not exist), passes it
+    /// Reads the text (strict UTF-8, a byte order mark dropped; <see langword="null"/> when the file does not exist), passes it
     /// to <paramref name="change"/> and writes what it returns as UTF-8 without a byte order mark, creating the folder
     /// if needed. Nothing is written when <paramref name="change"/> returns <see langword="null"/> or throws.
     /// </summary>
     /// <param name="change">Returns the new text, or <see langword="null"/> when nothing needs writing. It may run more than once.</param>
     /// <returns>Whether the file was written.</returns>
     /// <exception cref="AgentStateException">
-    /// The file cannot be read or written, or it changed on every one of three attempts; the message names the path,
-    /// never the content.
+    /// The file cannot be read or written, is not valid UTF-8, or was busy or changed on every one of three attempts; the
+    /// message names the path, never the content.
     /// </exception>
     public async Task<bool> UpdateAsync(Func<string?, string?> change, CancellationToken ct)
     {
@@ -66,24 +85,45 @@ public sealed class ClaudeSettingsFile
             if (attempt == MaxAttempts)
             {
                 throw new AgentStateException(
-                    $"Claude Code's settings file '{FilePath}' kept changing while nexer-ai updated it; it was left as Claude Code wrote it. Try again.");
+                    $"Claude Code's settings file '{FilePath}' was busy or kept changing while nexer-ai updated it; it was left as it was. Try again.");
             }
 
             await Task.Delay(RetryDelay, ct).ConfigureAwait(false);
         }
     }
 
+    private static string? FinalLinkTarget(string path)
+    {
+        try
+        {
+            return new FileInfo(path).ResolveLinkTarget(returnFinalTarget: true)?.FullName;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null; // Not a link, or not readable: the read reports a real problem.
+        }
+    }
+
+    /// <summary>The file to read and replace: <see cref="FilePath"/>, or what it links to.</summary>
+    private string TargetPath() => resolveLink(FilePath) is { Length: > 0 } target ? target : FilePath;
+
     private async Task<string?> ReadAsync(CancellationToken ct)
     {
         try
         {
-            using var stream = new FileStream(FilePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-            using var reader = new StreamReader(stream, Utf8NoBom, detectEncodingFromByteOrderMarks: true);
+            using var stream = new FileStream(TargetPath(), FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var reader = new StreamReader(stream, StrictUtf8, detectEncodingFromByteOrderMarks: true);
             return await reader.ReadToEndAsync(ct).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
         {
             return null;
+        }
+        catch (DecoderFallbackException ex)
+        {
+            // The bytes are not quoted: they are the person's settings.
+            throw new AgentStateException(
+                $"Claude Code's settings file '{FilePath}' is not valid UTF-8 (a file saved in another encoding?); nexer-ai left it untouched. Save it as UTF-8 and run nexer-ai again.", ex);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -98,10 +138,11 @@ public sealed class ClaudeSettingsFile
     /// </summary>
     private async Task<bool> TryReplaceAsync(string? original, string updated, CancellationToken ct)
     {
-        var tempPath = $"{FilePath}.{Guid.NewGuid():N}.tmp";
+        var targetPath = TargetPath();
+        var tempPath = $"{targetPath}.{Guid.NewGuid():N}.tmp";
         try
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
+            Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
             using (var stream = new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
             {
                 await stream.WriteAsync(Utf8NoBom.GetBytes(updated), ct).ConfigureAwait(false);
@@ -115,12 +156,13 @@ public sealed class ClaudeSettingsFile
 
             try
             {
-                File.Move(tempPath, FilePath, overwrite: true);
+                File.Move(tempPath, targetPath, overwrite: true);
                 return true;
             }
-            catch (IOException ex) when (ex is not FileNotFoundException and not DirectoryNotFoundException && File.Exists(FilePath))
+            catch (Exception ex) when (IsSharingViolation(ex, targetPath))
             {
-                // Sharing violation: a reader such as Claude Code or an antivirus scan has the file open.
+                // A reader such as Claude Code or an antivirus scan has the file open. Windows reports that as an
+                // IOException or, for a handle opened without delete sharing, as an access error.
                 return false;
             }
         }
@@ -133,6 +175,16 @@ public sealed class ClaudeSettingsFile
             TryDelete(tempPath);
         }
     }
+
+    /// <summary>An access error on a file that exists and is not read-only is a busy file; on a read-only one it is a refusal to report.</summary>
+    private static bool IsSharingViolation(Exception ex, string path) =>
+        ex switch
+        {
+            FileNotFoundException or DirectoryNotFoundException => false,
+            IOException => File.Exists(path),
+            UnauthorizedAccessException => File.Exists(path) && !File.GetAttributes(path).HasFlag(FileAttributes.ReadOnly),
+            _ => false,
+        };
 
     private static void TryDelete(string path)
     {
