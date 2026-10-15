@@ -19,6 +19,8 @@ public sealed class ClaudeCodeAgentInstallerTests : IDisposable
 
     private string WorkingDirectory => Path.Combine(temp.Path, "repo", "sub");
 
+    private string Bin => Path.Combine(temp.Path, "bin");
+
     [Fact]
     public async Task GetInstalledPluginsAsync_runs_claude_plugin_list_in_the_working_directory()
     {
@@ -27,17 +29,89 @@ public sealed class ClaudeCodeAgentInstallerTests : IDisposable
             Result = new(0, """[{"id": "nexer-core@nexer", "version": "1.0.0", "scope": "user", "enabled": false, "installPath": "x"}]""", string.Empty),
         };
 
+        var claude = temp.WriteFile(@"bin\claude.exe");
+
         var plugins = await Installer(runner).GetInstalledPluginsAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal([new InstalledPlugin("nexer-core", "nexer", "1.0.0", PluginScope.User, Enabled: false)], plugins);
         var run = Assert.Single(runner.Runs);
-        Assert.Equal(("claude", WorkingDirectory), (run.FileName, run.WorkingDirectory));
+        Assert.Equal((claude, WorkingDirectory), (run.FileName, run.WorkingDirectory));
         Assert.Equal(["plugin", "list", "--json"], run.Arguments);
+    }
+
+    [Theory]
+    [InlineData(new[] { @"a\claude.cmd" }, @"a\claude.cmd")]
+    [InlineData(new[] { @"a\claude.cmd", @"a\claude.exe" }, @"a\claude.exe")]
+    [InlineData(new[] { @"a\claude.cmd", @"b\claude.exe" }, @"a\claude.cmd")]
+    [InlineData(new[] { @"b\claude.exe", @"c\claude.exe" }, @"b\claude.exe")]
+    [InlineData(new[] { @"c\claude.exe" }, @"c\claude.exe")]
+    public async Task GetInstalledPluginsAsync_runs_the_first_claude_exe_or_cmd_on_PATH_folder_by_folder(string[] files, string expected)
+    {
+        foreach (var file in files)
+        {
+            temp.WriteFile(file);
+        }
+
+        var runner = new FakeProcessRunner { Result = new(0, "[]", string.Empty) };
+        var searchPath = $@"relative;;{temp.Path}\a;  ""{temp.Path}\b"" ;{temp.Path}\c\";
+
+        await Installer(runner, searchPath).GetInstalledPluginsAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(Path.Combine(temp.Path, expected), Assert.Single(runner.Runs).FileName);
+    }
+
+    [Fact]
+    public async Task GetInstalledPluginsAsync_ignores_a_claude_in_a_relative_PATH_entry_or_the_working_directory()
+    {
+        temp.WriteFile(@"bin\claude.exe");
+        temp.WriteFile(@"repo\sub\claude.exe");
+        var runner = new FakeProcessRunner();
+
+        var error = await Assert.ThrowsAsync<AgentStateException>(
+            () => Installer(runner, @"bin;.").GetInstalledPluginsAsync(TestContext.Current.CancellationToken));
+
+        Assert.Contains("PATH", error.Message, StringComparison.Ordinal);
+        Assert.Empty(runner.Runs);
+    }
+
+    [Fact]
+    public async Task GetInstalledPluginsAsync_says_what_it_looked_for_and_how_to_install_when_claude_is_not_on_PATH()
+    {
+        var runner = new FakeProcessRunner();
+
+        var error = await Assert.ThrowsAsync<AgentStateException>(
+            () => Installer(runner).GetInstalledPluginsAsync(TestContext.Current.CancellationToken));
+
+        foreach (var text in new[] { "claude.exe", "claude.cmd", "PATH", "https://code.claude.com/docs/en/setup" })
+        {
+            Assert.Contains(text, error.Message, StringComparison.Ordinal);
+        }
+
+        Assert.Empty(runner.Runs);
+    }
+
+    [Theory]
+    [InlineData(ProcessRunner.ErrorDirectory, "working directory")]
+    [InlineData(ProcessRunner.ErrorFileNotFound, "no longer exists")]
+    [InlineData(ProcessRunner.ErrorPathNotFound, "no longer exists")]
+    [InlineData(5, "Windows error 5")]
+    [InlineData(193, "Windows error 193")]
+    public async Task GetInstalledPluginsAsync_tells_why_claude_cannot_be_started_from_the_error_code(int code, string expected)
+    {
+        temp.WriteFile(@"bin\claude.exe");
+        var runner = new FakeProcessRunner { Exception = new Win32Exception(code) };
+
+        var error = await Assert.ThrowsAsync<AgentStateException>(
+            () => Installer(runner).GetInstalledPluginsAsync(TestContext.Current.CancellationToken));
+
+        Assert.Contains(expected, error.Message, StringComparison.Ordinal);
+        Assert.IsType<Win32Exception>(error.InnerException);
     }
 
     [Fact]
     public async Task GetInstalledPluginsAsync_reports_a_failed_command_without_its_output()
     {
+        temp.WriteFile(@"bin\claude.exe");
         var runner = new FakeProcessRunner { Result = new(1, "ghp_secret-out", "ghp_secret-err") };
 
         var error = await Assert.ThrowsAsync<AgentStateException>(
@@ -45,17 +119,6 @@ public sealed class ClaudeCodeAgentInstallerTests : IDisposable
 
         Assert.Contains("exited with code 1", error.Message, StringComparison.Ordinal);
         Assert.DoesNotContain("ghp_", error.ToString(), StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public async Task GetInstalledPluginsAsync_reports_that_claude_cannot_be_started()
-    {
-        var runner = new FakeProcessRunner { Exception = new Win32Exception(2) };
-
-        var error = await Assert.ThrowsAsync<AgentStateException>(
-            () => Installer(runner).GetInstalledPluginsAsync(TestContext.Current.CancellationToken));
-
-        Assert.Contains("PATH", error.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -94,10 +157,19 @@ public sealed class ClaudeCodeAgentInstallerTests : IDisposable
     [Fact]
     public void Constructor_rejects_relative_paths()
     {
-        Assert.Throws<ArgumentException>(() => new ClaudeCodeAgentInstaller(new FakeProcessRunner(), new LocalFileSystem(), ".claude.json", WorkingDirectory));
-        Assert.Throws<ArgumentException>(() => new ClaudeCodeAgentInstaller(new FakeProcessRunner(), new LocalFileSystem(), ConfigFile, "repo"));
+        Assert.Throws<ArgumentException>(() => new ClaudeCodeAgentInstaller(new FakeProcessRunner(), new LocalFileSystem(), ".claude.json", WorkingDirectory, Bin));
+        Assert.Throws<ArgumentException>(() => new ClaudeCodeAgentInstaller(new FakeProcessRunner(), new LocalFileSystem(), ConfigFile, "repo", Bin));
     }
 
-    private ClaudeCodeAgentInstaller Installer(IProcessRunner runner) =>
-        new(runner, new LocalFileSystem(), ConfigFile, WorkingDirectory);
+    [Theory]
+    [InlineData(@"\\server")]
+    [InlineData(@"\\server\")]
+    [InlineData("//server")]
+    public void Constructor_rejects_a_working_directory_without_a_UNC_share(string workingDirectory)
+    {
+        Assert.Throws<ArgumentException>(() => new ClaudeCodeAgentInstaller(new FakeProcessRunner(), new LocalFileSystem(), ConfigFile, workingDirectory, Bin));
+    }
+
+    private ClaudeCodeAgentInstaller Installer(IProcessRunner runner, string? searchPath = null) =>
+        new(runner, new LocalFileSystem(), ConfigFile, WorkingDirectory, searchPath ?? Bin);
 }
