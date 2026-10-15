@@ -1,0 +1,215 @@
+using NexerAI.Adapters.Prompts;
+using NexerAI.Core.Ports;
+
+namespace NexerAI.Adapters.Tests.Prompts;
+
+/// <summary>Failures around the prompts that must never change what the person decided.</summary>
+public sealed class ConsolePrompterRobustnessTests
+{
+    private const string Prompt = "Azure DevOps token for dev.azure.com/acme";
+
+    [Theory]
+    [InlineData(typeof(InvalidOperationException))]
+    [InlineData(typeof(IOException))]
+    public void A_drain_that_fails_does_not_lose_a_completed_secret(Type exceptionType)
+    {
+        var console = new FakeConsole { KeyAvailableException = (Exception)Activator.CreateInstance(exceptionType, "No key state.")! };
+        console.Type("token\r");
+
+        Assert.Equal("token", new ConsolePrompter(console).ReadSecret(Prompt));
+    }
+
+    [Theory]
+    [InlineData(typeof(InvalidOperationException))]
+    [InlineData(typeof(IOException))]
+    public void A_drain_that_fails_does_not_turn_a_cancel_into_unavailable(Type exceptionType)
+    {
+        var console = new FakeConsole { KeyAvailableException = (Exception)Activator.CreateInstance(exceptionType, "No key state.")! };
+        console.Type("half").Press(ConsoleKey.Escape, '\x1b');
+
+        Assert.Throws<OperationCanceledException>(() => new ConsolePrompter(console).ReadSecret(Prompt));
+    }
+
+    [Fact]
+    public void A_drain_that_fails_does_not_stop_the_other_questions()
+    {
+        var console = new FakeConsole { KeyAvailableException = new InvalidOperationException("No key state.") };
+        console.Lines.Enqueue("y");
+        console.Lines.Enqueue("2");
+
+        var prompter = new ConsolePrompter(console);
+
+        Assert.True(prompter.Confirm("Install nexer-mod?"));
+        Assert.Equal("QA", prompter.Choose("Role?", ["Developer", "QA"]));
+    }
+
+    [Fact]
+    public void An_endless_key_source_cannot_keep_the_drain_from_ending()
+    {
+        var console = new FakeConsole { EndlessKeys = true };
+        console.Type("token\r");
+
+        Assert.Equal("token", new ConsolePrompter(console).ReadSecret(Prompt));
+        Assert.InRange(console.EndlessReads, 1, ConsolePrompter.MaxDiscardedKeys);
+    }
+
+    [Fact]
+    public void An_endless_key_source_cannot_keep_a_cancel_from_ending()
+    {
+        var console = new FakeConsole { EndlessKeys = true };
+        console.Press(ConsoleKey.Escape, '\x1b');
+
+        Assert.Throws<OperationCanceledException>(() => new ConsolePrompter(console).ReadSecret(Prompt));
+        Assert.InRange(console.EndlessReads, 1, ConsolePrompter.MaxDiscardedKeys);
+    }
+
+    [Fact]
+    public void A_newline_that_arrives_after_a_secret_does_not_answer_the_next_confirm()
+    {
+        // The rest of a pasted "secret\r\nmore" reaches the console while the line break after the secret is written.
+        var console = new FakeConsole().Type("token\r").Late(2, "\n");
+        console.Lines.Enqueue("y");
+        var prompter = new ConsolePrompter(console);
+
+        Assert.Equal("token", prompter.ReadSecret(Prompt));
+        Assert.True(prompter.Confirm("Install nexer-mod?"));
+    }
+
+    [Fact]
+    public void A_stale_newline_before_a_confirm_does_not_answer_it()
+    {
+        var console = new FakeConsole().TypeBefore("\n");
+        console.Lines.Enqueue("y");
+
+        Assert.True(new ConsolePrompter(console).Confirm("Install nexer-mod?"));
+    }
+
+    [Fact]
+    public void A_stale_newline_before_a_choose_does_not_answer_it()
+    {
+        var console = new FakeConsole().TypeBefore("\r");
+        console.Lines.Enqueue("2");
+
+        Assert.Equal("QA", new ConsolePrompter(console).Choose("Role?", ["Developer", "QA"]));
+        Assert.DoesNotContain("not one of the choices", console.Output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Keys_waiting_before_a_secret_prompt_are_not_part_of_the_secret()
+    {
+        var console = new FakeConsole().TypeBefore("old\r").Type("token\r");
+
+        Assert.Equal("token", new ConsolePrompter(console).ReadSecret(Prompt));
+    }
+
+    [Fact]
+    public void The_line_feed_of_a_crlf_that_is_already_waiting_is_swallowed_after_enter()
+    {
+        var console = new FakeConsole().Type("token\r\n");
+        console.Lines.Enqueue("y");
+        var prompter = new ConsolePrompter(console);
+
+        Assert.Equal("token", prompter.ReadSecret(Prompt));
+        Assert.True(prompter.Confirm("Install nexer-mod?"));
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    public void Questions_go_to_standard_error_unless_only_standard_error_is_redirected(bool outputRedirected, bool errorRedirected)
+    {
+        var console = new FakeConsole { IsOutputRedirected = outputRedirected, IsErrorRedirected = errorRedirected };
+        Script(console);
+
+        Ask(new ConsolePrompter(console));
+
+        Assert.NotEmpty(console.Output);
+        Assert.Empty(console.StandardOutput);
+    }
+
+    [Fact]
+    public void Questions_go_to_standard_output_when_only_standard_error_is_redirected()
+    {
+        var console = new FakeConsole { IsErrorRedirected = true };
+        Script(console);
+
+        Ask(new ConsolePrompter(console));
+
+        Assert.NotEmpty(console.Output);
+        Assert.Equal(console.Output, console.StandardOutput);
+    }
+
+    [Fact]
+    public void Questions_are_refused_when_the_person_cannot_see_either_stream()
+    {
+        var console = new FakeConsole { IsErrorRedirected = true, IsOutputRedirected = true };
+        Script(console);
+        var prompter = new ConsolePrompter(console);
+
+        var choose = Assert.Throws<PromptUnavailableException>(() => prompter.Choose("Role?", ["Developer", "QA"]));
+        Assert.Throws<PromptUnavailableException>(() => prompter.Confirm("Install nexer-mod?"));
+        Assert.Throws<PromptUnavailableException>(() => prompter.ReadSecret(Prompt));
+
+        Assert.Contains("--non-interactive", choose.Message, StringComparison.Ordinal);
+        Assert.Empty(console.Output);
+        Assert.Empty(console.ControlCSettings);
+    }
+
+    private static void Script(FakeConsole console)
+    {
+        console.Lines.Enqueue("2");
+        console.Lines.Enqueue("y");
+        console.Type("token\r");
+    }
+
+    private static void Ask(ConsolePrompter prompter)
+    {
+        prompter.ReadSecret(Prompt);
+        prompter.Choose("Role?", ["Developer", "QA"]);
+        prompter.Confirm("Install nexer-mod?");
+    }
+
+    [Theory]
+    [InlineData(typeof(InvalidOperationException))]
+    [InlineData(typeof(IOException))]
+    public void A_failing_line_break_after_the_secret_does_not_replace_the_secret(Type exceptionType)
+    {
+        var console = new FakeConsole { FailingWrite = Environment.NewLine, WriteException = (Exception)Activator.CreateInstance(exceptionType, "Closed.")! };
+        console.Type("token\r");
+
+        Assert.Equal("token", new ConsolePrompter(console).ReadSecret(Prompt));
+        Assert.Equal([true, false], console.ControlCSettings);
+    }
+
+    [Fact]
+    public void A_failing_line_break_after_a_cancel_does_not_replace_the_cancel()
+    {
+        var console = new FakeConsole { FailingWrite = Environment.NewLine, WriteException = new IOException("Closed.") };
+        console.Type("half").Press(ConsoleKey.Escape, '\x1b');
+
+        Assert.Throws<OperationCanceledException>(() => new ConsolePrompter(console).ReadSecret(Prompt));
+        Assert.Equal([true, false], console.ControlCSettings);
+    }
+
+    [Theory]
+    [InlineData(typeof(InvalidOperationException))]
+    [InlineData(typeof(IOException))]
+    public void A_failing_restore_of_ctrl_c_handling_does_not_replace_the_secret(Type exceptionType)
+    {
+        var console = new FakeConsole { RestoreException = (Exception)Activator.CreateInstance(exceptionType, "Console gone.")! };
+        console.Type("token\r");
+
+        Assert.Equal("token", new ConsolePrompter(console).ReadSecret(Prompt));
+    }
+
+    [Theory]
+    [InlineData(typeof(InvalidOperationException))]
+    [InlineData(typeof(IOException))]
+    public void A_failing_restore_of_ctrl_c_handling_does_not_replace_a_cancel(Type exceptionType)
+    {
+        var console = new FakeConsole { RestoreException = (Exception)Activator.CreateInstance(exceptionType, "Console gone.")! };
+        console.Type("half").Press(ConsoleKey.Escape, '\x1b');
+
+        Assert.Throws<OperationCanceledException>(() => new ConsolePrompter(console).ReadSecret(Prompt));
+    }
+}

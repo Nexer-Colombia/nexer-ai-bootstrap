@@ -6,12 +6,20 @@ namespace NexerAI.Adapters.Prompts;
 /// <summary>
 /// Asks the person at the console. Every question needs an interactive console: with redirected input it throws
 /// <see cref="PromptUnavailableException"/> before writing anything, because answers for scripts and CI come from
-/// the options of <c>--non-interactive</c>, not from a pipe. An invalid answer asks again; end of input (Ctrl+Z
-/// then Enter) throws <see cref="OperationCanceledException"/>. Answers are never repeated in messages.
+/// the options of <c>--non-interactive</c>, not from a pipe. Questions go to standard error, or to standard output when
+/// only standard error is redirected; with both redirected the person cannot see them and it throws too. An invalid
+/// answer asks again; end of input (Ctrl+Z then Enter) throws <see cref="OperationCanceledException"/>, and Ctrl+C at
+/// <see cref="Choose"/> or <see cref="Confirm"/> ends the process like in any console program. Keys typed ahead are
+/// discarded before each question. Answers are never repeated in messages.
 /// </summary>
 public sealed class ConsolePrompter : IPrompter
 {
+    /// <summary>The most keys one discard reads, so a stuck key repeat cannot hold a prompt forever.</summary>
+    internal const int MaxDiscardedKeys = 4096;
+
     private readonly IConsole console;
+
+    private bool questionsToOutput;
 
     /// <summary>Creates a prompter on the process console.</summary>
     public ConsolePrompter()
@@ -35,10 +43,11 @@ public sealed class ConsolePrompter : IPrompter
         }
 
         EnsureInteractive(question);
-        console.Write(question + Environment.NewLine);
+        DiscardPendingKeys();
+        Say(question + Environment.NewLine);
         for (var i = 0; i < choices.Count; i++)
         {
-            console.Write($"  {i + 1}) {choices[i]}{Environment.NewLine}");
+            Say($"  {i + 1}) {choices[i]}{Environment.NewLine}");
         }
 
         while (true)
@@ -57,7 +66,7 @@ public sealed class ConsolePrompter : IPrompter
                 }
             }
 
-            console.Write("That is not one of the choices." + Environment.NewLine);
+            Say("That is not one of the choices." + Environment.NewLine);
         }
     }
 
@@ -68,6 +77,7 @@ public sealed class ConsolePrompter : IPrompter
     public bool Confirm(string question)
     {
         EnsureInteractive(question);
+        DiscardPendingKeys();
         while (true)
         {
             switch (Ask($"{question} [y/N] ").ToUpperInvariant())
@@ -77,7 +87,7 @@ public sealed class ConsolePrompter : IPrompter
                 case "" or "N" or "NO":
                     return false;
                 default:
-                    console.Write("Answer y or n." + Environment.NewLine);
+                    Say("Answer y or n." + Environment.NewLine);
                     break;
             }
         }
@@ -87,8 +97,10 @@ public sealed class ConsolePrompter : IPrompter
     /// <remarks>
     /// Nothing is echoed, not even a <c>*</c> per character, so a screen share or recording shows neither the secret
     /// nor its length. Backspace removes the last character (a surrogate pair as one), Enter ends the input, Escape
-    /// or Ctrl+C cancels; arrows, function keys and other control keys are ignored. Keys left after Enter or a
-    /// cancel, such as the rest of a pasted clipboard, are discarded so the next question cannot echo them. An
+    /// or Ctrl+C cancels; arrows, function keys and other control keys are ignored. Keys waiting before the
+    /// question, and those left after Enter or a cancel (the rest of a pasted clipboard), are discarded, at most a few
+    /// thousand and without ever changing the outcome, so the next question cannot echo them or take a stale newline
+    /// as its answer. An
     /// empty or blank answer asks again. The characters are collected in an array that is cleared afterwards; the
     /// returned string cannot be wiped.
     /// </remarks>
@@ -97,6 +109,7 @@ public sealed class ConsolePrompter : IPrompter
     public string ReadSecret(string prompt)
     {
         EnsureInteractive(prompt);
+        DiscardPendingKeys();
         bool? controlCAsInput = null;
         try
         {
@@ -105,7 +118,7 @@ public sealed class ConsolePrompter : IPrompter
             console.TreatControlCAsInput = true;
             while (true)
             {
-                console.Write($"{prompt} (input hidden; Esc cancels): ");
+                Say($"{prompt} (input hidden; Esc cancels): ");
                 string? secret;
                 try
                 {
@@ -113,7 +126,7 @@ public sealed class ConsolePrompter : IPrompter
                 }
                 finally
                 {
-                    console.Write(Environment.NewLine);
+                    EndLine();
                 }
 
                 if (secret is not null)
@@ -121,7 +134,7 @@ public sealed class ConsolePrompter : IPrompter
                     return secret;
                 }
 
-                console.Write("Nothing was entered. Type or paste the value, or press Esc to cancel." + Environment.NewLine);
+                Say("Nothing was entered. Type or paste the value, or press Esc to cancel." + Environment.NewLine);
             }
         }
         catch (Exception ex) when (ex is InvalidOperationException or IOException)
@@ -185,11 +198,22 @@ public sealed class ConsolePrompter : IPrompter
         }
     }
 
+    /// <summary>
+    /// Reads and drops the keys waiting right now, at most <see cref="MaxDiscardedKeys"/>. Best effort: a console that
+    /// cannot say whether a key is waiting must not change the outcome of a prompt that already has its answer.
+    /// </summary>
     private void DiscardPendingKeys()
     {
-        while (console.KeyAvailable)
+        try
         {
-            console.ReadKey();
+            for (var i = 0; i < MaxDiscardedKeys && console.KeyAvailable; i++)
+            {
+                console.ReadKey();
+            }
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or IOException)
+        {
+            // Nothing more can be discarded; the answer or the cancel stands.
         }
     }
 
@@ -199,30 +223,58 @@ public sealed class ConsolePrompter : IPrompter
         {
             console.TreatControlCAsInput = controlCAsInput;
         }
-        catch (IOException)
+        catch (Exception ex) when (ex is InvalidOperationException or IOException)
         {
-            // The console went away; there is nothing left to restore.
+            // The console went away; there is nothing left to restore, and the outcome stands.
         }
     }
 
     private string Ask(string prompt)
     {
-        console.Write(prompt);
+        Say(prompt);
         return console.ReadLine()?.Trim() ?? throw new OperationCanceledException("Input ended before an answer.");
     }
 
     private void EnsureInteractive(string question)
     {
-        if (console.IsInputRedirected)
+        if (console.IsInputRedirected || (console.IsErrorRedirected && console.IsOutputRedirected))
         {
             throw Unavailable(question);
+        }
+
+        // Questions go to standard error; when only that is redirected, standard output is where the person reads them.
+        questionsToOutput = console.IsErrorRedirected;
+    }
+
+    /// <summary>Ends the line after the hidden input; a console that went away must not replace the secret or the cancel.</summary>
+    private void EndLine()
+    {
+        try
+        {
+            Say(Environment.NewLine);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or IOException)
+        {
+            // Only the line break is lost.
+        }
+    }
+
+    private void Say(string text)
+    {
+        if (questionsToOutput)
+        {
+            console.WriteOutput(text);
+        }
+        else
+        {
+            console.Write(text);
         }
     }
 
     private static PromptUnavailableException Unavailable(string question, Exception? innerException = null)
     {
         var message =
-            $"Cannot ask \"{question}\": nexer-ai needs an interactive console, and standard input is redirected or cannot read keys. "
+            $"Cannot ask \"{question}\": nexer-ai needs an interactive console, and standard input or both output streams are redirected, or it cannot read keys. "
             + "Run it in PowerShell or Windows Terminal, or pass the answers as options with --non-interactive.";
         return innerException is null ? new(message) : new(message, innerException);
     }
