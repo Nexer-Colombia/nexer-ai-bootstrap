@@ -118,20 +118,33 @@ public sealed class ClaudeCodeAgentInstaller : IAgentInstaller
 
         var scope = ScopeName(registration.Scope);
         McpServerRegistration? previous = null;
-        var removed = false;
+        string? projectFolder = null;
+        var present = false;
         if (ReadConfig() is { } json)
         {
-            var projectFolder = ClaudeConfig.ProjectFolder(fileSystem, workingDirectory);
-            if (ClaudeConfig.ReadMcpServers(json, projectFolder).Contains(new InstalledMcpServer(registration.Name, registration.Scope)))
+            projectFolder = ClaudeConfig.ProjectFolder(fileSystem, workingDirectory);
+            present = ClaudeConfig.ReadMcpServers(json, projectFolder).Contains(new InstalledMcpServer(registration.Name, registration.Scope));
+            if (present && ClaudeConfig.RunsCommand(json, projectFolder, registration))
             {
-                if (ClaudeConfig.RunsCommand(json, projectFolder, registration))
-                {
-                    return;
-                }
+                return;
+            }
 
+            if (present)
+            {
                 previous = ClaudeConfig.ReadMcpCommandLine(json, projectFolder, registration.Name, registration.Scope);
+            }
+        }
+
+        if (present)
+        {
+            try
+            {
                 await RunMcpCommandAsync("remove", [], scope, registration.Name, [], ct).ConfigureAwait(false);
-                removed = true;
+            }
+            catch (Exception ex) when (IsReplacementFailure(ex, ct) && IsEntryGone(registration, projectFolder!))
+            {
+                // The remove failed or was cancelled after it had already taken the entry out.
+                throw await ReplacementFailedAsync(registration, scope, previous, ex).ConfigureAwait(false);
             }
         }
 
@@ -139,18 +152,41 @@ public sealed class ClaudeCodeAgentInstaller : IAgentInstaller
         {
             await AddAsync(registration, scope, ct).ConfigureAwait(false);
         }
-        catch (Exception ex) when (removed && (ex is AgentStateException || (ex is OperationCanceledException && ct.IsCancellationRequested)))
+        catch (Exception ex) when (present && IsReplacementFailure(ex, ct))
         {
             // The old server is gone: put it back, so a failed or cancelled replacement does not leave the person without it.
-            var restored = await TryRestoreAsync(previous, scope).ConfigureAwait(false);
-            var cause = ex is OperationCanceledException ? "was cancelled" : "failed";
-            throw new AgentStateException(
-                $"Replacing the MCP server '{registration.Name}' ({scope} scope) {cause} after its old entry was removed; "
-                + (restored
-                    ? "the previous entry was restored."
-                    : "the previous entry could not be restored, so the server is now missing: run 'nexer-ai project' again to register it."),
-                ex);
+            throw await ReplacementFailedAsync(registration, scope, previous, ex).ConfigureAwait(false);
         }
+    }
+
+    private static bool IsReplacementFailure(Exception ex, CancellationToken ct) =>
+        ex is AgentStateException || (ex is OperationCanceledException && ct.IsCancellationRequested);
+
+    /// <summary>Whether <c>.claude.json</c> no longer holds the server; any trouble reading it counts as "still there".</summary>
+    private bool IsEntryGone(McpServerRegistration registration, string projectFolder)
+    {
+        try
+        {
+            return ReadConfig() is { } json
+                && !ClaudeConfig.ReadMcpServers(json, projectFolder).Contains(new InstalledMcpServer(registration.Name, registration.Scope));
+        }
+        catch (AgentStateException)
+        {
+            return false;
+        }
+    }
+
+    private async Task<AgentStateException> ReplacementFailedAsync(
+        McpServerRegistration registration, string scope, McpServerRegistration? previous, Exception cause)
+    {
+        var restored = await TryRestoreAsync(previous, scope).ConfigureAwait(false);
+        var what = cause is OperationCanceledException ? "was cancelled" : "failed";
+        return new AgentStateException(
+            $"Replacing the MCP server '{registration.Name}' ({scope} scope) {what} after its old entry was removed; "
+            + (restored
+                ? "its previous command line was restored, without its environment variables or headers: set those again if the server needs them."
+                : "the previous entry could not be restored, so the server is now missing: run 'nexer-ai project' again to register it."),
+            cause);
     }
 
     private Task AddAsync(McpServerRegistration registration, string scope, CancellationToken ct) =>

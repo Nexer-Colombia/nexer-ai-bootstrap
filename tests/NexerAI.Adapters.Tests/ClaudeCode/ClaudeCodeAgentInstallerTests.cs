@@ -501,6 +501,56 @@ public sealed class ClaudeCodeAgentInstallerTests : IDisposable
     }
 
     [Fact]
+    public async Task AddMcpServerAsync_says_that_only_the_command_line_is_restored()
+    {
+        temp.WriteFile(@"bin\claude.exe");
+        WriteLocalServer("nexer-jira", "C:/old/nexer-ai.exe", ["mcp-launch"]);
+        var runner = new FakeProcessRunner();
+        runner.Results.Enqueue(new(0, string.Empty, string.Empty));
+        runner.Results.Enqueue(new(1, string.Empty, string.Empty));
+        runner.Results.Enqueue(new(0, string.Empty, string.Empty));
+
+        var error = await Assert.ThrowsAsync<AgentStateException>(
+            () => Installer(runner).AddMcpServerAsync(Launcher("nexer-jira", PluginScope.Local), TestContext.Current.CancellationToken));
+
+        Assert.Contains("restored", error.Message, StringComparison.Ordinal);
+        Assert.Contains("environment variables", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AddMcpServerAsync_restores_the_server_when_the_remove_failed_after_deleting_the_entry()
+    {
+        temp.WriteFile(@"bin\claude.exe");
+        WriteLocalServer("nexer-jira", "C:/old/nexer-ai.exe", ["mcp-launch", "--type", "old"]);
+        var runner = new RemoveThenFailRunner(ConfigFile, cancelled: false);
+
+        var error = await Assert.ThrowsAsync<AgentStateException>(
+            () => Installer(runner).AddMcpServerAsync(Launcher("nexer-jira", PluginScope.Local), TestContext.Current.CancellationToken));
+
+        Assert.Equal(["remove", "add"], runner.Subcommands);
+        Assert.Equal("C:/old/nexer-ai.exe", runner.RestoredCommand);
+        Assert.Contains("restored", error.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("ghp_", error.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AddMcpServerAsync_restores_the_server_when_the_remove_was_cancelled_after_deleting_the_entry()
+    {
+        temp.WriteFile(@"bin\claude.exe");
+        WriteLocalServer("nexer-jira", "C:/old/nexer-ai.exe", ["mcp-launch"]);
+        using var cancel = new CancellationTokenSource();
+        var runner = new RemoveThenFailRunner(ConfigFile, cancelled: true, cancel);
+
+        var error = await Assert.ThrowsAsync<AgentStateException>(
+            () => Installer(runner).AddMcpServerAsync(Launcher("nexer-jira", PluginScope.Local), cancel.Token));
+
+        Assert.Equal(["remove", "add"], runner.Subcommands);
+        Assert.False(runner.RestoreTokenCancelled);
+        Assert.Contains("restored", error.Message, StringComparison.Ordinal);
+        Assert.IsAssignableFrom<OperationCanceledException>(error.InnerException);
+    }
+
+    [Fact]
     public async Task AddMcpServerAsync_reports_a_failed_add_without_its_output()
     {
         temp.WriteFile(@"bin\claude.exe");
@@ -543,6 +593,40 @@ public sealed class ClaudeCodeAgentInstallerTests : IDisposable
     public void Constructor_rejects_a_working_directory_without_a_UNC_share(string workingDirectory)
     {
         Assert.Throws<ArgumentException>(() => new ClaudeCodeAgentInstaller(new FakeProcessRunner(), new LocalFileSystem(), ConfigFile, workingDirectory, Bin));
+    }
+
+    /// <summary>
+    /// The <c>remove</c> deletes the entry from <c>.claude.json</c> and then fails (exit code 1) or is cancelled; the next
+    /// command is the restore, whose command and token it records.
+    /// </summary>
+    private sealed class RemoveThenFailRunner(string configFile, bool cancelled, CancellationTokenSource? cancel = null) : IProcessRunner
+    {
+        public List<string> Subcommands { get; } = [];
+
+        public string? RestoredCommand { get; private set; }
+
+        public bool? RestoreTokenCancelled { get; private set; }
+
+        public async Task<ProcessResult> RunAsync(
+            string fileName, IReadOnlyList<string> arguments, string workingDirectory, CancellationToken ct, string? standardInput = null)
+        {
+            Subcommands.Add(arguments[1]);
+            if (Subcommands.Count == 1)
+            {
+                File.WriteAllText(configFile, "{}");
+                if (cancelled)
+                {
+                    await cancel!.CancelAsync();
+                    ct.ThrowIfCancellationRequested();
+                }
+
+                return new ProcessResult(1, "ghp_secret", string.Empty);
+            }
+
+            RestoredCommand = arguments[arguments.ToList().IndexOf("--") + 1];
+            RestoreTokenCancelled = ct.IsCancellationRequested;
+            return new ProcessResult(0, string.Empty, string.Empty);
+        }
     }
 
     /// <summary>Removes fine, cancels the token while the first add runs and throws, then answers the restore.</summary>
